@@ -54,7 +54,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload coverage to Codecov
-        if: matrix.node == '22'
+        # Codecov is bound to the upstream repository; a fork has no upload token, so skip there.
+        if: matrix.node == '22' && github.repository == 'juicesharp/rpiv-mono'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0 (v6 tag was retagged onto this commit upstream)
         with:
           files: coverage/lcov.info
@@ -79,7 +80,7 @@ jobs:
   badges:
     name: update test-count badge
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'juicesharp/rpiv-mono'
     runs-on: ubuntu-latest
     permissions:
       contents: write
