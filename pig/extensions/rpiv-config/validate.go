@@ -34,7 +34,8 @@ import (
 //     decodes to the field type's zero value.
 //   - ValidateConfig never writes through a pointer it finds in dst: a promoted field reached through an
 //     embedded pointer is set on a copy of the pointee (allocated when nil), so defaults shared between
-//     calls are never mutated.
+//     calls are never mutated. A field promoted through an unexported embedded pointer cannot be reached
+//     that way (nor by encoding/json when the pointer is nil), so its keys are dropped.
 //
 // It returns false and leaves dst untouched, that is at its defaults, when dst or value does not satisfy the
 // contract; otherwise it returns true, also when every key was dropped. (The TypeScript version returns an

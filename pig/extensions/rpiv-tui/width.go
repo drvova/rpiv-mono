@@ -55,9 +55,11 @@ func isPrintableASCII(s string) bool {
 }
 
 // graphemeIter walks the extended grapheme clusters of a string, reporting the
-// width of each. A printable ASCII byte followed by another ASCII byte, or by
-// the end of the string, is always a complete one-column cluster, so those
-// bytes skip the Unicode segmentation entirely.
+// width of each. Clusters come from uniseg with UAX #29 rule GB9c (Indic
+// conjuncts) applied on top, as ICU's segmenter does for Pi. A printable ASCII
+// byte followed by another ASCII byte, or by the end of the string, is always
+// a complete one-column cluster, so those bytes skip the Unicode segmentation
+// entirely.
 type graphemeIter struct {
 	remaining string
 	cluster   string
@@ -80,10 +82,42 @@ func (g *graphemeIter) Next() bool {
 		g.cluster, g.remaining, g.width, g.state = s[:1], s[1:], 1, -1
 		return true
 	}
-	var clusterWidth int
-	g.cluster, g.remaining, clusterWidth, g.state = uniseg.FirstGraphemeClusterInString(s, g.state)
-	g.width = graphemeWidth(g.cluster, clusterWidth)
+	g.cluster, g.remaining, _, g.state = uniseg.FirstGraphemeClusterInString(s, g.state)
+	// GB9c: a consonant, linker chain joins the consonant that follows it,
+	// however many clusters uniseg made of the conjunct.
+	for endsWithConjunctLinker(g.cluster) && startsWithConjunctConsonant(g.remaining) {
+		var next string
+		next, g.remaining, _, g.state = uniseg.FirstGraphemeClusterInString(g.remaining, g.state)
+		g.cluster = s[:len(g.cluster)+len(next)]
+	}
+	g.width = graphemeWidth(g.cluster)
 	return true
+}
+
+// endsWithConjunctLinker reports whether cluster ends in
+// Consonant (Extend | Linker)* Linker (Extend | Linker)*, the left side of
+// rule GB9c.
+func endsWithConjunctLinker(cluster string) bool {
+	sawLinker := false
+	for cluster != "" {
+		r, n := utf8.DecodeLastRuneInString(cluster)
+		cluster = cluster[:len(cluster)-n]
+		switch {
+		case inRanges(incbLinkerRanges[:], r):
+			sawLinker = true
+		case inRanges(incbExtendRanges[:], r):
+		default:
+			return sawLinker && inRanges(incbConsonantRanges[:], r)
+		}
+	}
+	return false
+}
+
+// startsWithConjunctConsonant reports whether s begins with an
+// Indic_Conjunct_Break=Consonant code point, the right side of rule GB9c.
+func startsWithConjunctConsonant(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	return s != "" && inRanges(incbConsonantRanges[:], r)
 }
 
 // Str returns the current cluster.
@@ -92,14 +126,17 @@ func (g *graphemeIter) Str() string { return g.cluster }
 // Width returns the column width of the current cluster.
 func (g *graphemeIter) Width() int { return g.width }
 
-// graphemeWidth is pi-tui's graphemeWidth for one cluster, given the width
-// uniseg computed for it. uniseg already gives East Asian wide characters,
-// regional indicators and emoji presentation sequences two columns and
-// combining marks, controls and joiners zero; the remaining rules are Pi's: a
-// tab is three columns, the two- and three-em dashes are one, a keycap
-// sequence is an emoji, leading non-printing code points do not occupy a cell,
-// and a terminal spacing mark that Unicode makes zero width still counts one.
-func graphemeWidth(seg string, clusterWidth int) int {
+// graphemeWidth is pi-tui's graphemeWidth for one cluster. A tab is three
+// columns and a printable ASCII byte one. A cluster made only of terminal
+// spacing marks is one column per mark, and one made only of zero-width code
+// points is zero. An emoji presentation sequence (a pictographic base with
+// U+FE0F) and a keycap sequence are two columns. Otherwise leading non-printing
+// code points are skipped and the first printing code point sets the width:
+// two for East Asian wide, emoji presentation and regional indicators, one
+// otherwise. Each terminal spacing mark after it adds one, an ordinary mark adds
+// nothing, a printing code point after a mark (or a halfwidth and fullwidth
+// form) adds its own width, and a Thai or Lao vowel AM adds one.
+func graphemeWidth(seg string) int {
 	switch {
 	case seg == "":
 		return 0
@@ -110,18 +147,19 @@ func graphemeWidth(seg string, clusterWidth int) int {
 			return 1
 		}
 		return 0
-	case seg == "⸺" || seg == "⸻":
-		return 1
 	case isKeycapSequence(seg):
 		return 2
 	}
-	allSpacingMarks, allZeroWidth, count := true, true, 0
+	allSpacingMarks, allZeroWidth, count, hasVS16 := true, true, 0, false
 	for _, r := range seg {
 		if !isTerminalSpacingMark(r) {
 			allSpacingMarks = false
 		}
 		if !isZeroWidth(r) {
 			allZeroWidth = false
+		}
+		if r == 0xFE0F {
+			hasVS16 = true
 		}
 		count++
 	}
@@ -130,6 +168,9 @@ func graphemeWidth(seg string, clusterWidth int) int {
 	}
 	if allZeroWidth {
 		return 0
+	}
+	if hasVS16 && uniseg.StringWidth(seg) == 2 {
+		return 2
 	}
 	base := seg
 	for base != "" {
@@ -142,14 +183,27 @@ func graphemeWidth(seg string, clusterWidth int) int {
 	if base == "" {
 		return 0
 	}
-	width := clusterWidth
-	if len(base) != len(seg) {
-		width = uniseg.StringWidth(base)
+	cp, n := utf8.DecodeRuneInString(base)
+	width := runeCells(cp)
+	if cp == 0x2e3a || cp == 0x2e3b {
+		// The two- and three-em dashes are East Asian neutral: one column in Pi.
+		width = 1
 	}
-	_, n := utf8.DecodeRuneInString(base)
-	for _, r := range base[n:] {
-		if isTerminalSpacingMark(r) && runeCells(r) == 0 {
+	followsMark := false
+	for _, c := range base[n:] {
+		switch {
+		case isTerminalSpacingMark(c):
 			width++
+			followsMark = false
+		case unicode.Is(unicode.M, c):
+			followsMark = true
+		case !isNonPrinting(c):
+			if followsMark || (c >= 0xFF00 && c <= 0xFFEF) {
+				width += runeCells(c)
+			} else if c == 0x0E33 || c == 0x0EB3 {
+				width++
+			}
+			followsMark = false
 		}
 	}
 	return width
@@ -165,9 +219,32 @@ func isKeycapSequence(seg string) bool {
 	return c >= '0' && c <= '9' || c == '#' || c == '*'
 }
 
-// runeCells is the width uniseg gives a single code point.
+// runeCells is the width of a single printing code point: two for East Asian
+// wide and fullwidth, emoji presentation and regional indicators, zero for
+// joiners and non-spacing marks, one otherwise. uniseg measures it, except
+// where its tables disagree with Pi's: the line and paragraph separators and
+// the halfwidth katakana voiced sound marks are one column, and the wide
+// pictographs with text presentation and the ranges Unicode 16 made East Asian
+// wide are two.
 func runeCells(r rune) int {
+	switch {
+	case r == 0x2028 || r == 0x2029 || r == 0xFF9E || r == 0xFF9F:
+		return 1
+	case inRanges(wideOverrideRanges[:], r):
+		return 2
+	}
 	return uniseg.StringWidth(string(r))
+}
+
+// wideOverrideRanges are two-column code points uniseg measures as one: the
+// pictographs with text presentation whose East Asian width is wide (U+3030,
+// U+303D, U+3297, U+3299, U+1F202, U+1F237, U+1F260 to U+1F265) and the
+// symbol ranges Unicode 16 made wide (the Yijing trigrams, monograms and
+// digrams, hexagrams, Tai Xuan Jing symbols and counting rod numerals).
+var wideOverrideRanges = [...]rune{
+	0x2630, 0x2637, 0x268A, 0x268F, 0x3030, 0x3030, 0x303D, 0x303D,
+	0x3297, 0x3297, 0x3299, 0x3299, 0x4DC0, 0x4DFF, 0x1D300, 0x1D356,
+	0x1D360, 0x1D376, 0x1F202, 0x1F202, 0x1F237, 0x1F237, 0x1F260, 0x1F265,
 }
 
 // isTerminalSpacingMark reports a member of pi-tui's terminalSpacingMarkRegex.

@@ -10,7 +10,8 @@
 // combining marks, zero width joiners and other non-printing code points are
 // zero, and the spacing marks terminals allocate a cell for (pi-tui's
 // terminalSpacingMarkRegex) count one column each. Segmentation and East Asian
-// width come from github.com/rivo/uniseg.
+// width come from github.com/rivo/uniseg, with UAX #29 rule GB9c (Indic
+// conjuncts) applied on top so clusters match ICU's, which Pi uses.
 //
 // The key functions mirror pi-tui's keys.ts as PiG ports it: ParseKey names a
 // raw terminal input, MatchesKey compares one with a key identifier such as
@@ -30,10 +31,12 @@
 // that negotiation, so this package keeps its own flag, off by default (legacy
 // semantics); a caller that learns the mode sets it with SetKittyProtocolActive.
 //
-// Grapheme segmentation follows uniseg's Unicode tables without the GB9c Indic
-// conjunct rule ICU applies in Pi, so a conjunct such as "र्क" is two clusters
-// here and one in Pi; its width (2) agrees. Pi's RGI_Emoji test is approximated
-// by uniseg's emoji presentation rules plus the keycap sequences, and a lone
-// UTF-16 surrogate, which Pi measures as zero width, cannot occur in a Go
-// string.
+// Pi measures text with Unicode 17 tables; this package measures it with the
+// tables of Go's unicode package and of uniseg, which trail by one or two
+// versions. Code points assigned after their version (new combining marks,
+// new emoji) are one column here and whatever Pi makes them there; every code
+// point both know is measured as Pi measures it. Pi's RGI_Emoji test is
+// approximated by uniseg's emoji presentation rules plus the keycap sequences,
+// and a lone UTF-16 surrogate, which Pi measures as zero width, cannot occur
+// in a Go string.
 package tui

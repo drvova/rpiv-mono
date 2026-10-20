@@ -360,7 +360,7 @@ func isPrintableKey(baseKey string) bool {
 }
 
 func isSymbolKey(ch byte) bool {
-	return ch < 0x80 && strings.IndexByte("`-=[]\;',./!@#$%^&*()_+|~{}:<>?", ch) >= 0
+	return ch < 0x80 && strings.IndexByte("`-=[]\\;',./!@#$%^&*()_+|~{}:<>?", ch) >= 0
 }
 
 // shiftedSymbolKeys are the symbols a terminal reports as their produced
