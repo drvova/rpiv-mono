@@ -4,50 +4,50 @@
 [![codecov](https://codecov.io/gh/juicesharp/rpiv-mono/branch/main/graph/badge.svg?v=2)](https://codecov.io/gh/juicesharp/rpiv-mono)
 [![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/juicesharp/rpiv-mono/badges/tests.json)](https://github.com/juicesharp/rpiv-mono/actions/workflows/ci.yml)
 
-Fifteen packages in one npm workspace: the **rpiv-pi** pipeline, the [Pi Agent](https://github.com/badlogic/pi-mono) extensions it composes, and the internal packages holding them up. Twelve publish to npm; three never leave the repo. Kept together so orchestration and tool surfaces evolve and ship in lockstep.
+rpiv is a skill-based development workflow for AI coding agents: a pipeline of contract-carrying skills (`discover` → `research` / `design` / `blueprint` → `plan` → `implement` → `validate` → `code-review` → `commit`), the named subagents they dispatch, and the extensions that keep an experienced driver in the loop while the work moves at LLM speed. It now runs natively on [PiG (Pi in Go)](https://github.com/MichaelKinsy/PiG): the extensions are Go, composed by one Piglet manifest, and nothing in the pipeline needs Pi's TypeScript runtime or Node.js. The TypeScript packages that targeted [Pi Agent](https://github.com/badlogic/pi-mono) remain in `packages/` as the legacy implementation and as the single source of the skills and agent profiles both implementations share.
 
 **Where to start:**
 
-- **You want to use it** — `pi install npm:@juicesharp/rpiv-pi`, restart Pi, run `/rpiv-setup`. Full narrative, subagent map, and install walkthrough: [rpiv-pi.com](https://rpiv-pi.com).
-- **You want one piece of it** — every extension below stands alone. Pick a row from [Packages](#packages).
-- **You want to read or hack the code** — [Repo as a repo](#repo-as-a-repo) has the layout, the conventions, and what the git hooks enforce.
+- **You want to use it** — install [PiG](https://pi-in-go.dev/install) and a Go toolchain, clone this repo, and run `pig --piglet piglet.yaml`. Install, quick start, and the extension table: [pig/README.md](./pig/README.md). Full narrative and subagent map: [rpiv-pi.com](https://rpiv-pi.com).
+- **You want one piece of it** — every extension below stands alone; load one with `pig -e pig/extensions/rpiv-<name>` or select it in your own Piglet. Pick a row from [Packages](#packages).
+- **You want to read or hack the code** — [Repo as a repo](#repo-as-a-repo) has the layout, the conventions, and what the gates enforce. The porting contract between the two implementations is [pig/PORTING.md](./pig/PORTING.md).
 - **You want to know where this is going** — [roadmap.md](./roadmap.md) for the structured view, [Roadmap](#roadmap) for the reasoning behind it.
 
 ## Packages
 
-The pipeline needs most of them. **rpiv-args** expands shell-style `$1` and `$ARGUMENTS` placeholders inside skills, **rpiv-ask-user-question** lets the model put a structured questionnaire to the user instead of guessing, **rpiv-todo** keeps a live task overlay that survives `/reload` and compaction, **rpiv-advisor** escalates to a stronger reviewer model before the agent acts, **rpiv-web-tools** gives the model web search and fetch with pluggable providers, and **rpiv-workflow** chains skills into typed multi-stage pipelines (audited JSONL state, predicate routing, per-stage output validation) and ships the `/wf` command Pi calls to run them. A few exist because I wanted them inside Pi: **rpiv-btw** is a side-conversation pattern I got used to in Claude Code, **rpiv-voice** is on-device dictation for when I'd rather talk than type, and **rpiv-warp** integrates Pi with Warp terminal's notification system, because that's where I actually run Pi. **rpiv-i18n** is the one that came from users: it started as localization for ask-user-question and grew into a small SDK. And two are plumbing rather than products: **rpiv-config** is the shared config I/O every sibling depends on, published only so those dependencies resolve, and **rpiv-telemetry** wires Pi into MLflow — auto-instruments lifecycle events and sub-agent activity so runs are inspectable after the fact — but it stays `private: true` and is loaded from a checkout, never the registry.
+Every rpiv extension is a Go module under `pig/extensions/`, loaded by PiG from source (PiG builds it on first use and rebuilds on `/reload`). The pipeline needs most of them. **rpiv-args** expands shell-style `$1` and `$ARGUMENTS` placeholders inside skills, **rpiv-ask-user-question** lets the model put a structured questionnaire to the user instead of guessing, **rpiv-todo** keeps a live task overlay that survives `/reload` and compaction, **rpiv-advisor** escalates to a stronger reviewer model before the agent acts, **rpiv-web-tools** gives the model web search and fetch with pluggable providers, **rpiv-workflow** chains skills into typed multi-stage pipelines (audited JSONL state, predicate routing, per-stage output validation) and ships the `/wf` command, and **rpiv-agents** is the `Agent` tool that dispatches the named subagents as detached PiG sessions. A few exist because I wanted them inside the agent: **rpiv-btw** is a side-conversation pattern I got used to in Claude Code, **rpiv-voice** is on-device dictation for when I'd rather talk than type, and **rpiv-warp** integrates with Warp terminal's notification system, because that's where I actually run it. **rpiv-i18n** is the one that came from users: it started as localization for ask-user-question and grew into a small SDK. **rpiv-telemetry** wires the agent into MLflow — auto-instruments lifecycle events and subagent activity so runs are inspectable after the fact. And the libraries are plumbing rather than products: **rpiv-config** is the shared config I/O every sibling depends on (same files and shapes as the TypeScript version, so a machine that ran rpiv under Pi needs no migration), **rpiv-host**, **rpiv-tui**, **rpiv-rpc** and **rpiv-testkit** hold the host view, terminal helpers, child-session client and test harness the extensions are built on.
 
 > [!TIP]
-> **For the full pipeline narrative, the subagent map, and install instructions, visit [rpiv-pi.com](https://rpiv-pi.com).**
+> **For install, quick start, configuration and the development gates of the Go port, see [pig/README.md](./pig/README.md). For the pipeline narrative and the subagent map, visit [rpiv-pi.com](https://rpiv-pi.com).**
 
-### Pi extensions (published)
+### PiG extensions
 
-Each one installs on its own with `pi install npm:@juicesharp/rpiv-<name>`, then a Pi restart. `/rpiv-setup` (shipped by `rpiv-pi`) installs only the siblings the pipeline actually depends on; the rest are opt-in.
+`piglet.yaml` at the repository root selects the pipeline set; opt-in extensions load with `pig -e pig/extensions/rpiv-<name>` or from a Piglet that `extends` this one.
 
-| Package | Role | Installed by `/rpiv-setup` | npm |
-| --- | --- | :---: | --- |
-| `rpiv-pi` | Pipeline (skills + subagents) | — *(it ships `/rpiv-setup`)* | [`@juicesharp/rpiv-pi`](https://www.npmjs.com/package/@juicesharp/rpiv-pi) |
-| `rpiv-args` | `$1` / `$ARGUMENTS` placeholders and `` !`cmd` `` substitution in skills | ✓ | [`@juicesharp/rpiv-args`](https://www.npmjs.com/package/@juicesharp/rpiv-args) |
-| `rpiv-ask-user-question` | Structured questionnaire to the user | ✓ | [`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question) |
-| `rpiv-todo` | Live task overlay surviving `/reload` | ✓ | [`@juicesharp/rpiv-todo`](https://www.npmjs.com/package/@juicesharp/rpiv-todo) |
-| `rpiv-advisor` | Escalate to a stronger reviewer model | ✓ | [`@juicesharp/rpiv-advisor`](https://www.npmjs.com/package/@juicesharp/rpiv-advisor) |
-| `rpiv-web-tools` | Web search + fetch with pluggable providers | ✓ | [`@juicesharp/rpiv-web-tools`](https://www.npmjs.com/package/@juicesharp/rpiv-web-tools) |
-| `rpiv-i18n` | Localization SDK for sibling extensions | ✓ | [`@juicesharp/rpiv-i18n`](https://www.npmjs.com/package/@juicesharp/rpiv-i18n) |
-| `rpiv-workflow` | `/wf` runner — chain skills into typed multi-stage pipelines | ✓ | [`@juicesharp/rpiv-workflow`](https://www.npmjs.com/package/@juicesharp/rpiv-workflow) |
-| `rpiv-btw` | `/btw` side-conversation slash command | — | [`@juicesharp/rpiv-btw`](https://www.npmjs.com/package/@juicesharp/rpiv-btw) |
-| `rpiv-voice` | Local voice dictation (`/voice` overlay, on-device Whisper) | — | [`@juicesharp/rpiv-voice`](https://www.npmjs.com/package/@juicesharp/rpiv-voice) |
-| `rpiv-warp` | Warp terminal notification integration | — | [`@juicesharp/rpiv-warp`](https://www.npmjs.com/package/@juicesharp/rpiv-warp) |
+| Extension | Role | Selected by `piglet.yaml` |
+| --- | --- | :---: |
+| `rpiv-pi` | Pipeline runtime: session hooks, `/rpiv-setup`, `/rpiv-update-agents`, `/rpiv-models`, `/lanes`, built-in `/wf` workflows | ✓ |
+| `rpiv-workflow` | `/wf` runner — chain skills into typed multi-stage pipelines | ✓ |
+| `rpiv-agents` | `Agent` tool — named subagents in detached `pig --mode rpc` sessions | ✓ |
+| `rpiv-args` | `$1` / `$ARGUMENTS` placeholders and `` !`cmd` `` substitution in skills | ✓ |
+| `rpiv-ask-user-question` | Structured questionnaire to the user | ✓ |
+| `rpiv-todo` | Live task overlay surviving `/reload` | ✓ |
+| `rpiv-advisor` | Escalate to a stronger reviewer model | ✓ |
+| `rpiv-web-tools` | Web search + fetch with pluggable providers | ✓ |
+| `rpiv-i18n` | Localization SDK for sibling extensions | ✓ |
+| `rpiv-btw` | `/btw` side-conversation slash command | opt-in |
+| `rpiv-voice` | Local voice dictation (`/voice` overlay, on-device Whisper) | opt-in |
+| `rpiv-warp` | Warp terminal notification integration | opt-in |
+| `rpiv-telemetry` | MLflow observability — auto-instruments lifecycle + subagent activity | opt-in |
 
 ### Everything else in the workspace
 
-Four packages you do not `pi install`. One is on npm as a library; three are `private: true` and resolve only inside a checkout.
-
-| Package | Role | How you get it |
+| Directory | Role | How you get it |
 | --- | --- | --- |
-| [`rpiv-config`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-config) | Shared XDG-aware JSON config I/O for the siblings | Published as a library: `npm install @juicesharp/rpiv-config`. Not a Pi extension — it registers nothing, and ten siblings already pull it in as a dependency. [npm](https://www.npmjs.com/package/@juicesharp/rpiv-config) |
-| [`rpiv-telemetry`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-telemetry) | MLflow observability — auto-instruments lifecycle + sub-agent activity | **Not published.** Inside this repo Pi loads it through the workspace symlink; elsewhere, point Pi at a checkout: `pi install ./packages/rpiv-telemetry` |
-| [`rpiv-site`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-site) | The [rpiv-pi.com](https://rpiv-pi.com) site (static Astro build) | **Not published.** Built from this repo with `npm run build:site`, deployed to GitHub Pages by CI |
-| [`test-utils`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/test-utils) | Shared test fixtures (`@juicesharp/rpiv-test-utils`) | **Not published.** Symlinked by npm workspaces; imported by the test suite only |
+| `pig/extensions/rpiv-config`, `rpiv-host`, `rpiv-tui`, `rpiv-rpc`, `rpiv-testkit` | Shared Go libraries (config I/O, host view, terminal helpers, child-session client, test harness) | Required by the extensions through relative `replace` directives; not loaded by PiG on their own |
+| `packages/rpiv-pi/skills`, `packages/rpiv-pi/agents` | The skills and agent profiles (Markdown) | Selected by `piglet.yaml` and embedded by `rpiv-pi`; shared with the legacy implementation |
+| `packages/rpiv-*` | The legacy TypeScript extensions for [Pi Agent](https://github.com/badlogic/pi-mono), published to npm as `@juicesharp/rpiv-*` | `pi install npm:@juicesharp/rpiv-pi` for a Pi user; not needed to run the pipeline on PiG |
+| [`packages/rpiv-site`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-site) | The [rpiv-pi.com](https://rpiv-pi.com) site (static Astro build) | **Not published.** Built from this repo with `npm run build:site`, deployed to GitHub Pages by CI |
 
 ## Roadmap
 
@@ -73,9 +73,11 @@ Find me on X: [@juicesharp](https://x.com/juicesharp).
 
 ## Repo as a repo
 
-npm workspaces monorepo. Clone, `npm install` at the root, that's it. Node 22+ and npm 11+ (the `engines` floor).
+Two implementations side by side, one set of skills. The Go port lives under `pig/`; the legacy TypeScript packages under `packages/`.
 
-A few choices worth naming up front:
+**The Go port (`pig/`).** One Go module per extension under `pig/extensions/`, each exposing PiG's conventional factory `func Extension() *sdk.Extension`. PiG builds every extension with `GOWORK=off`, so each module is self-contained: it requires the PiG extension SDK and reaches sibling libraries through relative `replace` directives. `pig/go.work` exists for editors and workspace-wide commands only. `make -C pig all` runs gofmt, vet, build and `go test -race` per module; `make -C pig validate PIG=pig` runs `pig install --validate-only` on every extension. Assets both implementations need (prompts, locales, agent profiles) are copied into the Go modules and embedded; a lockstep test asserts each copy still matches its original under `packages/`. [pig/PORTING.md](./pig/PORTING.md) is the contract the port follows: identifiers, tool names, schemas, config files, persisted shapes and user-visible strings mirror the TypeScript originals, and every divergence forced by PiG's subprocess model is recorded in the module's `doc.go`.
+
+**The legacy TypeScript packages (`packages/`).** npm workspaces monorepo. Clone, `npm install` at the root, that's it. Node 22+ and npm 11+ (the `engines` floor). A few choices worth naming up front:
 
 - No build step. Packages publish raw `.ts`; Pi loads TypeScript directly. No `dist/`, no per-package tsconfig.
 - One Vitest runner at the root walks every package. No per-package vitest configs.
@@ -91,7 +93,7 @@ Issues are welcome. PRs too, but please open an issue first if the change isn't 
 
 ## Status and expectations
 
-Started April 2026. MIT licensed.
+Started April 2026 as Pi extensions; ported to Go for PiG in October 2026. MIT licensed.
 
 Single maintainer (me); Claude Code is a co-author on most commits.
 
@@ -100,6 +102,7 @@ Actively maintained as a personal project. Issues triaged on best effort. Cadenc
 ## Pointers
 
 - Site: [rpiv-pi.com](https://rpiv-pi.com)
+- Go port: [pig/README.md](./pig/README.md) · PiG: [pi-in-go.dev](https://pi-in-go.dev)
 - Roadmap: [roadmap.md](./roadmap.md)
 - README standard: [docs/readme-standard.md](./docs/readme-standard.md)
 - License: [MIT](./LICENSE)
