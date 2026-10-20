@@ -1,0 +1,100 @@
+# The rpiv Piglet: rpiv-pi for PiG (Pi in Go). Run it from a checkout with `pig --piglet piglet.yaml`.
+# It selects the Go ports of the pipeline's extensions under pig/extensions/ and the unchanged skills under
+# packages/rpiv-pi/skills/. Opt-in extensions (rpiv-btw, rpiv-voice, rpiv-warp) and the private
+# rpiv-telemetry are not selected here; load one with `pig -e pig/extensions/rpiv-btw` or in a Piglet that
+# `extends` this one. See pig/README.md.
+name: rpiv
+description: "rpiv-pi for PiG: a skill-based development workflow (discover, research, design, plan, implement, validate, code-review, commit) with its sibling extensions, ported to Go."
+
+release:
+  version: 2.13.9
+
+extensions:
+  - name: rpiv-i18n
+    origins: [local:pig/extensions/rpiv-i18n]
+  - name: rpiv-args
+    origins: [local:pig/extensions/rpiv-args]
+  - name: rpiv-ask-user-question
+    origins: [local:pig/extensions/rpiv-ask-user-question]
+  - name: rpiv-todo
+    origins: [local:pig/extensions/rpiv-todo]
+  - name: rpiv-advisor
+    origins: [local:pig/extensions/rpiv-advisor]
+  - name: rpiv-web-tools
+    origins: [local:pig/extensions/rpiv-web-tools]
+  - name: rpiv-agents
+    origins: [local:pig/extensions/rpiv-agents]
+  - name: rpiv-workflow
+    origins: [local:pig/extensions/rpiv-workflow]
+  - name: rpiv-pi
+    origins: [local:pig/extensions/rpiv-pi]
+
+skills:
+  - name: acceptance
+    origins: [local:packages/rpiv-pi/skills/acceptance]
+  - name: amend
+    origins: [local:packages/rpiv-pi/skills/amend]
+  - name: annotate-guidance
+    origins: [local:packages/rpiv-pi/skills/annotate-guidance]
+  - name: annotate-inline
+    origins: [local:packages/rpiv-pi/skills/annotate-inline]
+  - name: architecture-review
+    origins: [local:packages/rpiv-pi/skills/architecture-review]
+  - name: blueprint
+    origins: [local:packages/rpiv-pi/skills/blueprint]
+  - name: changelog
+    origins: [local:packages/rpiv-pi/skills/changelog]
+  - name: code-review
+    origins: [local:packages/rpiv-pi/skills/code-review]
+  - name: commit
+    origins: [local:packages/rpiv-pi/skills/commit]
+  - name: create-handoff
+    origins: [local:packages/rpiv-pi/skills/create-handoff]
+  - name: design
+    origins: [local:packages/rpiv-pi/skills/design]
+  - name: design-review
+    origins: [local:packages/rpiv-pi/skills/design-review]
+  - name: design-slice
+    origins: [local:packages/rpiv-pi/skills/design-slice]
+  - name: discover
+    origins: [local:packages/rpiv-pi/skills/discover]
+  - name: elaborate
+    origins: [local:packages/rpiv-pi/skills/elaborate]
+  - name: explore
+    origins: [local:packages/rpiv-pi/skills/explore]
+  - name: frontend-design
+    origins: [local:packages/rpiv-pi/skills/frontend-design]
+  - name: grade
+    origins: [local:packages/rpiv-pi/skills/grade]
+  - name: implement
+    origins: [local:packages/rpiv-pi/skills/implement]
+  - name: lens-grade
+    origins: [local:packages/rpiv-pi/skills/lens-grade]
+  - name: migrate-to-guidance
+    origins: [local:packages/rpiv-pi/skills/migrate-to-guidance]
+  - name: plan
+    origins: [local:packages/rpiv-pi/skills/plan]
+  - name: pr-triage
+    origins: [local:packages/rpiv-pi/skills/pr-triage]
+  - name: quick-plan
+    origins: [local:packages/rpiv-pi/skills/quick-plan]
+  - name: remediate
+    origins: [local:packages/rpiv-pi/skills/remediate]
+  - name: research
+    origins: [local:packages/rpiv-pi/skills/research]
+  - name: resume-handoff
+    origins: [local:packages/rpiv-pi/skills/resume-handoff]
+  - name: revise
+    origins: [local:packages/rpiv-pi/skills/revise]
+  - name: slice
+    origins: [local:packages/rpiv-pi/skills/slice]
+  - name: synthesize
+    origins: [local:packages/rpiv-pi/skills/synthesize]
+  - name: validate
+    origins: [local:packages/rpiv-pi/skills/validate]
+
+# Ambient Resources stay available: a user's own extensions and skills under ~/.pig/agent and the trusted
+# workspace load as they do in bare PiG.
+discovery:
+  extensions: [workspace, user]
+  skills: [workspace, user]

@@ -1,0 +1,9 @@
+go 1.26
+
+use (
+	./extensions/rpiv-config
+	./extensions/rpiv-tui
+	./extensions/rpiv-host
+	./extensions/rpiv-testkit
+	./extensions/rpiv-rpc
+)
