@@ -156,7 +156,9 @@ type specCollector struct {
 	spec CollectorSpec
 }
 
-func (c *specCollector) Collect(ctx CollectContext) (CollectResult, error) { return c.spec.Collect(ctx) }
+func (c *specCollector) Collect(ctx CollectContext) (CollectResult, error) {
+	return c.spec.Collect(ctx)
+}
 
 type specSnapshotCollector struct {
 	specCollector
