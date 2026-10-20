@@ -1,6 +1,9 @@
 package workflow
 
-import "strconv"
+import (
+	"errors"
+	"strconv"
+)
 
 // Loop constructors — Fanout / Iterate / Assess build the LoopDef a stage
 // carries on its single Loop field, validating at construction (the
@@ -251,12 +254,15 @@ func AssessShapeIssues(candidate any) []string {
 
 // checkedPositiveInt is the construction-time positive-int gate for Max /
 // Concurrency / RetryHaltedUnits — the single spelling of "integer >= 1".
+// The label is the full origin+field prefix (`fanout(): max`); the message is
+// `<label> must be an integer >= 1 (got <value>)` — a plain error, no
+// `origin:` prefix, matching the TypeScript throw.
 func checkedPositiveInt(value *int, label string) (*int, error) {
 	if value == nil {
 		return nil, nil
 	}
 	if *value < 1 {
-		return nil, InvalidError(label, "must be an integer >= 1 (got "+strconv.Itoa(*value)+")")
+		return nil, errors.New(label + " must be an integer >= 1 (got " + strconv.Itoa(*value) + ")")
 	}
 	return Int(*value), nil
 }

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"strings"
 	"sync"
 )
 
@@ -10,9 +11,9 @@ type RunResult struct {
 	// Disposition is the prompt's disposition. For DispositionHandled no
 	// run happened and the other fields are zero.
 	Disposition string
-	// LastAssistantText is the text of the last assistant message of the
-	// run that had text blocks, joined as get_last_assistant_text joins
-	// them; empty when none had any.
+	// LastAssistantText is the trimmed text of the last assistant message
+	// of the run whose text is not blank, concatenated as
+	// get_last_assistant_text concatenates it; empty when none had text.
 	LastAssistantText string
 	// Aborted is agent_settled's aborted flag.
 	Aborted bool
@@ -96,7 +97,7 @@ func (c *Client) Run(ctx context.Context, message string, opts PromptOptions, on
 			if message.Usage != nil {
 				result.Usage.Add(*message.Usage)
 			}
-			if text := message.Text(); text != "" {
+			if text := strings.TrimSpace(message.Text()); text != "" {
 				result.LastAssistantText = text
 			}
 		case EventToolExecutionStart:

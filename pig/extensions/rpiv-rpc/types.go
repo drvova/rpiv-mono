@@ -374,16 +374,16 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Text joins the message's text blocks with newlines, the rule of
-// get_last_assistant_text.
+// Text concatenates the message's text blocks, the rule of
+// get_last_assistant_text (which also trims the result).
 func (m Message) Text() string {
-	var parts []string
+	var text strings.Builder
 	for _, block := range m.Content {
 		if block.Type == "text" {
-			parts = append(parts, block.Text)
+			text.WriteString(block.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return text.String()
 }
 
 // ToolCalls returns the message's toolCall blocks.
