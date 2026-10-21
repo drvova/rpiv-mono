@@ -5,13 +5,16 @@
 //
 // The width functions mirror pi-tui's utils.ts (visibleWidth, truncateToWidth,
 // wrapTextWithAnsi): a tab is three columns, SGR, OSC and APC escape sequences
-// are zero columns, and text is measured per extended grapheme cluster. East
-// Asian wide characters and emoji presentation clusters are two columns,
-// combining marks, zero width joiners and other non-printing code points are
-// zero, and the spacing marks terminals allocate a cell for (pi-tui's
-// terminalSpacingMarkRegex) count one column each. Segmentation and East Asian
-// width come from github.com/rivo/uniseg, with UAX #29 rule GB9c (Indic
-// conjuncts) applied on top so clusters match ICU's, which Pi uses.
+// are zero columns, and text is measured per extended grapheme cluster. An RGI
+// emoji (a code point or sequence matching Pi's \p{RGI_Emoji}) and an East
+// Asian wide character are two columns, combining marks, zero width joiners
+// and other non-printing code points are zero, and the spacing marks terminals
+// allocate a cell for (pi-tui's terminalSpacingMarkRegex) count one column
+// each. Segmentation comes from github.com/rivo/uniseg with UAX #29 rule GB9c
+// (Indic conjuncts) applied on top so clusters match ICU's, which Pi uses;
+// East Asian width, the terminal spacing marks and the RGI emoji set are the
+// Unicode 17 tables pi-tui evaluates at runtime, copied from PiG's tui/widthx
+// (unicode_ranges.go, rgi_sequences.go).
 //
 // The key functions mirror pi-tui's keys.ts as PiG ports it: ParseKey names a
 // raw terminal input, MatchesKey compares one with a key identifier such as
@@ -31,12 +34,15 @@
 // that negotiation, so this package keeps its own flag, off by default (legacy
 // semantics); a caller that learns the mode sets it with SetKittyProtocolActive.
 //
-// Pi measures text with Unicode 17 tables; this package measures it with the
-// tables of Go's unicode package and of uniseg, which trail by one or two
-// versions. Code points assigned after their version (new combining marks,
-// new emoji) are one column here and whatever Pi makes them there; every code
-// point both know is measured as Pi measures it. Pi's RGI_Emoji test is
-// approximated by uniseg's emoji presentation rules plus the keycap sequences,
-// and a lone UTF-16 surrogate, which Pi measures as zero width, cannot occur
-// in a Go string.
+// Pi classifies code points with Unicode 17 tables. East Asian width and the
+// RGI emoji set are Unicode 17 here as well, so every RGI emoji sequence (a
+// modifier sequence on a text-presentation base, a ZWJ sequence carrying
+// U+FE0F) is two columns exactly as in Pi, and everything else is measured by
+// its first printing code point plus the marks and forms that follow it. The
+// Mark, Control, Format and Default_Ignorable classes come from Go's unicode
+// package and grapheme segmentation from uniseg, both at Unicode 15, so a
+// combining mark or a cluster-initial letter assigned or reclassified after
+// Unicode 15 is classified by the older tables here and by Unicode 17 in Pi. A
+// lone UTF-16 surrogate, which Pi measures as zero width, cannot occur in a Go
+// string.
 package tui

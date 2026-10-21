@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -10,23 +11,51 @@ import (
 
 func TestWithTimeout(t *testing.T) {
 	type timeoutErr struct{ error }
+	marker := &timeoutErr{errors.New("boom")}
+	block := func(ctx context.Context) (int, error) { <-ctx.Done(); return 0, ctx.Err() }
 	t.Run("returns the given error instance on timeout", func(t *testing.T) {
-		marker := &timeoutErr{errors.New("boom")}
-		_, err := WithTimeout(func() (int, error) { time.Sleep(200 * time.Millisecond); return 1, nil }, time.Millisecond, marker)
+		_, err := WithTimeout(context.Background(), block, time.Millisecond, marker)
 		if !errors.Is(err, marker) || err.Error() != "boom" {
 			t.Fatalf("%v", err)
 		}
 	})
 	t.Run("plain error form", func(t *testing.T) {
-		_, err := WithTimeout(func() (int, error) { select {} }, time.Millisecond, errors.New("timeout string"))
+		_, err := WithTimeout(context.Background(), block, time.Millisecond, errors.New("timeout string"))
 		if err == nil || err.Error() != "timeout string" {
 			t.Fatalf("%v", err)
 		}
 	})
 	t.Run("resolves when fn settles first", func(t *testing.T) {
-		v, err := WithTimeout(func() (int, error) { return 42, nil }, time.Second, errors.New("should not fire"))
+		v, err := WithTimeout(context.Background(), func(context.Context) (int, error) { return 42, nil }, time.Second, errors.New("should not fire"))
 		if err != nil || v != 42 {
 			t.Fatalf("%v %v", v, err)
+		}
+	})
+	t.Run("cancels fn's context when the deadline passes", func(t *testing.T) {
+		observed := make(chan error, 1)
+		_, err := WithTimeout(context.Background(), func(ctx context.Context) (int, error) {
+			<-ctx.Done()
+			observed <- ctx.Err()
+			return 0, ctx.Err()
+		}, time.Millisecond, marker)
+		if !errors.Is(err, marker) {
+			t.Fatalf("%v", err)
+		}
+		select {
+		case got := <-observed:
+			if !errors.Is(got, context.DeadlineExceeded) {
+				t.Fatalf("fn saw %v", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("fn was never cancelled")
+		}
+	})
+	t.Run("a cancelled parent context returns its error, not the timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := WithTimeout(ctx, block, time.Second, marker)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("%v", err)
 		}
 	})
 }
@@ -57,6 +86,10 @@ func TestDeepEqual(t *testing.T) {
 		{"extra key", map[string]any{"a": 1, "b": 2}, map[string]any{"a": 1}, false},
 		{"differing value", map[string]any{"a": 1}, map[string]any{"a": 2}, false},
 		{"Schema vs map[string]any", Schema{"type": "string"}, map[string]any{"type": "string"}, true},
+		{"functions never compare equal and never panic", func() {}, func() {}, false},
+		{"channels never compare equal", make(chan int), make(chan int), false},
+		{"structs holding slices never compare equal", struct{ S []int }{[]int{1}}, struct{ S []int }{[]int{1}}, false},
+		{"function vs scalar", func() {}, 1, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

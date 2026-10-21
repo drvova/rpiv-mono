@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // ArtifactHandle is the storage-agnostic reference a collector emits and a
@@ -23,7 +24,10 @@ type ArtifactHandle struct {
 	Href  string
 	ID    string
 	Bytes []byte
-	Mime  string
+	// Mime is an inline handle's optional media type: nil when the collector
+	// gave none (no `mime` key in the row), otherwise the string it gave —
+	// "" included, which the row keeps as `"mime": ""`.
+	Mime *string
 }
 
 // Handle kind discriminators.
@@ -37,12 +41,13 @@ const (
 // Artifact is one artifact a stage produced. The handle is the storage
 // reference; Role is an optional user-facing label ("primary", "patch", "log")
 // downstream stages can route on; Meta carries collector-attached hints the
-// matching parser needs. The framework reads artifacts[0] as the "primary"
-// artifact for chain inheritance; Role is metadata only.
+// matching parser needs — absent when nil, kept (`"meta": {}`) when empty.
+// The framework reads artifacts[0] as the "primary" artifact for chain
+// inheritance; Role is metadata only.
 type Artifact struct {
 	Handle ArtifactHandle `json:"handle"`
 	Role   string         `json:"role,omitempty"`
-	Meta   map[string]any `json:"meta,omitempty"`
+	Meta   map[string]any `json:"meta,omitzero"`
 }
 
 // FS builds a filesystem handle.
@@ -54,9 +59,15 @@ func URL(href string) ArtifactHandle { return ArtifactHandle{Kind: HandleKindURL
 // Opaque builds an external-id handle.
 func Opaque(id string) ArtifactHandle { return ArtifactHandle{Kind: HandleKindOpaque, ID: id} }
 
-// Inline builds an inline-bytes handle; an empty mime is omitted.
-func Inline(bytes []byte, mime string) ArtifactHandle {
-	return ArtifactHandle{Kind: HandleKindInline, Bytes: bytes, Mime: mime}
+// Inline builds an inline-bytes handle. The optional mime (at most one) is
+// recorded when given — even when empty — and absent otherwise.
+func Inline(bytes []byte, mime ...string) ArtifactHandle {
+	h := ArtifactHandle{Kind: HandleKindInline, Bytes: bytes}
+	if len(mime) > 0 {
+		given := mime[0]
+		h.Mime = &given
+	}
+	return h
 }
 
 // Inline-handle wire format — the lossy placeholder HandleToString emits for
@@ -69,7 +80,8 @@ const (
 
 // HandleToString serialises a handle to a human-readable string — what the
 // runner threads into a downstream stage's prompt input. Inline handles
-// serialise to their byte length since their content isn't promptable.
+// serialise to their byte length since their content isn't promptable; the
+// mime suffix appears only for a non-empty mime.
 func HandleToString(h ArtifactHandle) string {
 	switch h.Kind {
 	case HandleKindFS:
@@ -80,8 +92,8 @@ func HandleToString(h ArtifactHandle) string {
 		return h.ID
 	case HandleKindInline:
 		s := inlineHandlePrefix + strconv.Itoa(len(h.Bytes)) + inlineHandleByteUnit
-		if h.Mime != "" {
-			s += inlineHandleMimeSeparator + h.Mime
+		if h.Mime != nil && *h.Mime != "" {
+			s += inlineHandleMimeSeparator + *h.Mime
 		}
 		return s
 	}
@@ -89,38 +101,45 @@ func HandleToString(h ArtifactHandle) string {
 }
 
 // MarshalJSON emits only the fields the handle's kind carries, in the
-// TypeScript insertion order, so persisted rows stay byte-identical. Inline
-// bytes serialise the way JSON.stringify renders a Uint8Array (an object of
-// index keys), the shape the TypeScript implementation writes.
+// TypeScript insertion order and without HTML escaping, so persisted rows
+// stay byte-identical to JSON.stringify's. Inline bytes serialise the way
+// JSON.stringify renders a Uint8Array: an object of index keys in index
+// order.
 func (h ArtifactHandle) MarshalJSON() ([]byte, error) {
+	var b strings.Builder
+	b.WriteString(`{"kind":`)
+	b.WriteString(jsonStringify(h.Kind))
 	switch h.Kind {
 	case HandleKindFS:
-		return json.Marshal(struct {
-			Kind string `json:"kind"`
-			Path string `json:"path"`
-		}{h.Kind, h.Path})
+		b.WriteString(`,"path":`)
+		b.WriteString(jsonStringify(h.Path))
 	case HandleKindURL:
-		return json.Marshal(struct {
-			Kind string `json:"kind"`
-			Href string `json:"href"`
-		}{h.Kind, h.Href})
+		b.WriteString(`,"href":`)
+		b.WriteString(jsonStringify(h.Href))
 	case HandleKindOpaque:
-		return json.Marshal(struct {
-			Kind string `json:"kind"`
-			ID   string `json:"id"`
-		}{h.Kind, h.ID})
+		b.WriteString(`,"id":`)
+		b.WriteString(jsonStringify(h.ID))
 	case HandleKindInline:
-		indexed := make(map[string]int, len(h.Bytes))
-		for i, b := range h.Bytes {
-			indexed[strconv.Itoa(i)] = int(b)
+		b.WriteString(`,"bytes":{`)
+		for i, v := range h.Bytes {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteByte('"')
+			b.WriteString(strconv.Itoa(i))
+			b.WriteString(`":`)
+			b.WriteString(strconv.Itoa(int(v)))
 		}
-		return json.Marshal(struct {
-			Kind  string         `json:"kind"`
-			Bytes map[string]int `json:"bytes"`
-			Mime  string         `json:"mime,omitempty"`
-		}{h.Kind, indexed, h.Mime})
+		b.WriteByte('}')
+		if h.Mime != nil {
+			b.WriteString(`,"mime":`)
+			b.WriteString(jsonStringify(*h.Mime))
+		}
+	default:
+		return nil, fmt.Errorf("handle: unknown kind %q", h.Kind)
 	}
-	return nil, fmt.Errorf("handle: unknown kind %q", h.Kind)
+	b.WriteByte('}')
+	return []byte(b.String()), nil
 }
 
 // UnmarshalJSON reads any of the four shapes MarshalJSON writes; inline bytes
@@ -131,7 +150,7 @@ func (h *ArtifactHandle) UnmarshalJSON(data []byte) error {
 		Path  string          `json:"path"`
 		Href  string          `json:"href"`
 		ID    string          `json:"id"`
-		Mime  string          `json:"mime"`
+		Mime  *string         `json:"mime"`
 		Bytes json.RawMessage `json:"bytes"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {

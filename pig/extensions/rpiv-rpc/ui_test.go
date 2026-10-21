@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -163,6 +164,90 @@ func TestDialogHandlerReleasedOnClose(t *testing.T) {
 	case <-released:
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler not released by Close")
+	}
+}
+
+func TestDoneJoinsDialogHandlers(t *testing.T) {
+	var mu sync.Mutex
+	var reported []error
+	c := startFakeWith(t, func(o *Options) {
+		o.OnError = func(err error) {
+			mu.Lock()
+			reported = append(reported, err)
+			mu.Unlock()
+		}
+	})
+	finished := make(chan struct{})
+	c.SetUIHandler(func(ctx context.Context, req UIRequest) UIResponse {
+		<-ctx.Done()
+		time.Sleep(300 * time.Millisecond)
+		close(finished)
+		return UICancelled()
+	})
+	go func() {
+		_, _ = c.Call(context.Background(), map[string]any{"type": "ask", "method": "select", "title": "x", "options": []string{"a"}})
+	}()
+	col := collect(c)
+	col.waitFor(t, EventExtensionUIRequest)
+	c.Close()
+	waitDone(t, c)
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Done closed while a dialog handler was still running")
+	}
+	// The late answer failed because the client closed, which the child no
+	// longer waits for: not a failure to report.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reported) != 0 {
+		t.Fatalf("reported %v", reported)
+	}
+}
+
+func TestCloseFromDialogHandler(t *testing.T) {
+	c := startFake(t)
+	returned := make(chan struct{})
+	c.SetUIHandler(func(ctx context.Context, req UIRequest) UIResponse {
+		c.Close()
+		close(returned)
+		return UIValue("late")
+	})
+	go func() {
+		_, _ = c.Call(context.Background(), map[string]any{"type": "ask", "method": "select", "title": "x", "options": []string{"a"}})
+	}()
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close called from a dialog handler did not return")
+	}
+	waitDone(t, c)
+}
+
+func TestDialogAnswerFailureIsReported(t *testing.T) {
+	// A loopback client has no process, so a failed answer is neither
+	// closed nor exited: it is the one case that reaches OnError.
+	c, _, to := newLoopback(t)
+	reported := make(chan error, 1)
+	c.opts.OnError = func(err error) { reported <- err }
+	c.SetUIHandler(func(context.Context, UIRequest) UIResponse { return UIValue("x") })
+	broken, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = broken.Close()
+	t.Cleanup(func() { _ = w.Close() })
+	c.stdin = w
+	if _, err := to.Write([]byte(`{"type":"extension_ui_request","id":"ui-9","method":"input","title":"x"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-reported:
+		if !strings.Contains(err.Error(), "ui-9") {
+			t.Fatalf("reported %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed answer was not reported")
 	}
 }
 

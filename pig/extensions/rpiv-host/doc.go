@@ -23,23 +23,28 @@
 //
 // A few host facilities are not methods on sdk.Context but struct-typed
 // facades returned by it (sdk.EventBus, sdk.SessionManager, sdk.ModelRegistry,
-// sdk.UITheme) or package-level functions (sdk.AgentDir, sdk.Version). Those
-// cannot be substituted either, so Host wraps each of them in a flat method
-// whose dependencies are plain Go values:
+// sdk.UITheme) or package-level functions (sdk.AgentDir, sdk.ConfigDirName,
+// sdk.Version). Those cannot be substituted either, so Host wraps each of them
+// in a flat method whose dependencies are plain Go values:
 //
-//   - AgentDir and Version wrap sdk.AgentDir and sdk.Version.
+//   - AgentDir, ConfigDirName and Version wrap sdk.AgentDir, sdk.ConfigDirName
+//     and sdk.Version: the host facts behind ~/.pig/agent and <cwd>/.pig
+//     paths and version gates.
 //   - EmitEvent and SubscribeEvent wrap sdk.Context.Events(). A subscribed
 //     handler receives only the payload; the request context the bus passes
-//     is dropped because a fake has no context to offer.
+//     is dropped because a fake has no context to offer. A nil handler is
+//     rejected with ErrNilHandler, as the bus itself rejects it.
 //   - BuildSessionContext, BuildContextEntries and SessionGetBranch wrap
 //     sdk.Context.SessionManager().
-//   - Theme wraps sdk.Context.UITheme() behind Styler, the seven text styling
-//     methods the rpiv TUI code uses (the same method set as rpiv-tui's
-//     Styler, so values convert freely).
-//   - AllModels, AvailableModels, ProviderAuthStatus, ProviderDisplayName and
-//     APIKeyForProvider wrap sdk.Context.ModelRegistry() accessors; Stream and
-//     StreamSimple wrap its streaming calls behind ModelStream, which
-//     *sdk.ModelEventStream satisfies.
+//   - Theme wraps sdk.Context.UITheme() as a tui.Styler (rpiv-tui), the seven
+//     text styling methods the rpiv TUI code renders with. Styler is a type
+//     alias of tui.Styler, so a sibling may spell Theme's result either way
+//     and its own `Theme() tui.Styler` is satisfied by Host.
+//   - AllModels, AvailableModels, FindModel, ProviderAuthStatus,
+//     ProviderDisplayName, APIKeyForProvider and APIKeyAndHeaders wrap
+//     sdk.Context.ModelRegistry() accessors; Stream and StreamSimple wrap its
+//     streaming calls behind ModelStream, which *sdk.ModelEventStream
+//     satisfies.
 //
 // # How extensions use it
 //
@@ -61,10 +66,15 @@
 //
 // # Limits
 //
-// Theme requires a live context: sdk.Context.UITheme reads the extension's
-// replicated theme snapshot through the connection, so calling Theme on a
-// Host built from a zero sdk.Context panics. The same holds for every
-// delegated method that talks to the host; only AgentDir and Version (which
-// read the PIG_EXT_HOST_INFO environment the host starts the process with) are
-// usable without one. The module depends on nothing but the SDK.
+// Almost every method needs a live context, one a handler received from the
+// host. On a Host built from a zero sdk.Context every delegated method that
+// talks to the host panics (Theme, for example, reads the extension's
+// replicated theme snapshot through the connection). The exceptions are Done,
+// Err and ToolCallID, which return nil, nil and "" on a zero context, and the
+// host facts AgentDir, ConfigDirName and Version, which read the
+// PIG_EXT_HOST_INFO environment the host starts the process with and so work
+// while the factory runs. Each wrapped member's doc comment says which group
+// it is in.
+//
+// The module depends on the SDK and on rpiv-tui (for Styler), nothing else.
 package host

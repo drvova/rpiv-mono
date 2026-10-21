@@ -39,19 +39,42 @@ func fakeEnv(extra ...string) []string {
 }
 
 // startFake starts the test binary as a fake pig with a short close grace.
+// The client is closed and fully drained when the test ends.
 func startFake(t *testing.T, extraEnv ...string) *Client {
+	t.Helper()
+	return startFakeWith(t, nil, extraEnv...)
+}
+
+// startFakeWith is startFake with configure applied to the options first.
+func startFakeWith(t *testing.T, configure func(*Options), extraEnv ...string) *Client {
 	t.Helper()
 	opts := Options{
 		Pig:        os.Args[0],
 		Env:        fakeEnv(extraEnv...),
 		CloseGrace: 300 * time.Millisecond,
 	}
+	if configure != nil {
+		configure(&opts)
+	}
 	c, err := Start(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(c.Close)
+	t.Cleanup(func() {
+		c.Close()
+		waitDone(t, c)
+	})
 	return c
+}
+
+// waitDone fails the test when Done does not close within a bound.
+func waitDone(t *testing.T, c *Client) {
+	t.Helper()
+	select {
+	case <-c.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("Done did not close")
+	}
 }
 
 // testContext returns a context that fails the test on a hang.

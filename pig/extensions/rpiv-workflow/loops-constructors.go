@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"errors"
 	"strconv"
 )
@@ -237,8 +238,8 @@ func AssessShapeIssues(candidate any) []string {
 			return []string{"an assess object is required"}
 		}
 		judge = a["judge"]
-		_, hasDone = a["done"].(DoneFn)
-		_, hasFeedForward = a["feedForward"].(FeedForwardFn)
+		hasDone = isDoneFn(a["done"])
+		hasFeedForward = isFeedForwardFn(a["feedForward"])
 	default:
 		return []string{"an assess object is required"}
 	}
@@ -250,6 +251,29 @@ func AssessShapeIssues(candidate any) []string {
 		issues = append(issues, "`feedForward` must be a function building the next producer arg")
 	}
 	return issues
+}
+
+// isDoneFn / isFeedForwardFn are the `typeof x === "function"` tests of the
+// map-literal arms: the named function type and its underlying signature
+// both read as the function they are; a nil function does not.
+func isDoneFn(v any) bool {
+	switch f := v.(type) {
+	case DoneFn:
+		return f != nil
+	case func(Output) bool:
+		return f != nil
+	}
+	return false
+}
+
+func isFeedForwardFn(v any) bool {
+	switch f := v.(type) {
+	case FeedForwardFn:
+		return f != nil
+	case func(context.Context, FeedForwardContext) (string, error):
+		return f != nil
+	}
+	return false
 }
 
 // checkedPositiveInt is the construction-time positive-int gate for Max /

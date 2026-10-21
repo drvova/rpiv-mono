@@ -219,3 +219,31 @@ func TestAnsiCodeTracker(t *testing.T) {
 		})
 	}
 }
+
+// An RGI emoji sequence is one two-column cluster when a line is wrapped: a
+// modifier sequence on a text-presentation base and a ZWJ sequence carrying
+// U+FE0F are neither split nor measured by their parts.
+func TestWrapTextWithAnsiRGIEmojiSequences(t *testing.T) {
+	cases := []struct {
+		text  string
+		width int
+		want  []string
+	}{
+		{"❤️‍🔥", 2, []string{"❤️‍🔥"}},
+		{"☝🏻कक", 2, []string{"☝🏻", "कक"}},
+		{"☝🏻☝🏻☝🏻", 4, []string{"☝🏻☝🏻", "☝🏻"}},
+		{"\U0001FAE9\U0001FAE9", 2, []string{"\U0001FAE9", "\U0001FAE9"}},
+		{"a ❤️‍🔥 b", 4, []string{"a ❤️‍🔥", "b"}},
+	}
+	for _, tc := range cases {
+		got := WrapTextWithAnsi(tc.text, tc.width)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("WrapTextWithAnsi(%q, %d) = %q, want %q", tc.text, tc.width, got, tc.want)
+		}
+		for _, line := range got {
+			if w := VisibleWidth(line); w > tc.width {
+				t.Errorf("line %q of %q is %d columns, want <= %d", line, tc.text, w, tc.width)
+			}
+		}
+	}
+}

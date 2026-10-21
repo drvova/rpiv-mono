@@ -221,7 +221,9 @@ type MatchBranch struct {
 // published verdict; a channel-sourced route does not mark the source stage
 // ReadsData.
 type MatchOptions struct {
-	Fallback string
+	// Fallback is nil when absent; when given it must be a non-empty stage
+	// name (Match refuses an empty one at construction).
+	Fallback *string
 	From     string
 }
 
@@ -250,7 +252,13 @@ func Match(field string, branches []MatchBranch, opts *MatchOptions) (*EdgeFn, e
 	}
 	fallback, from := "", ""
 	if opts != nil {
-		fallback, from = opts.Fallback, opts.From
+		if opts.Fallback != nil {
+			if err := RequireNonEmptyString(*opts.Fallback, "match", "`fallback`, when provided, must be a non-empty stage name", false); err != nil {
+				return nil, err
+			}
+			fallback = *opts.Fallback
+		}
+		from = opts.From
 	}
 	noMatch := fallback
 	if noMatch == "" {

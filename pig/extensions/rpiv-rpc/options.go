@@ -28,6 +28,12 @@ type Options struct {
 	// Stderr receives the child's diagnostics; nil discards them. It is
 	// written from a goroutine until the child's stderr closes.
 	Stderr io.Writer
+	// OnError receives a failure the client cannot return to any caller: the
+	// answer to a dialog that could not be written while the child was still
+	// running. It is called from the dialog's goroutine; nil discards such
+	// failures. A write that fails because the child is closed or has exited
+	// is not reported, since the child no longer waits for the answer.
+	OnError func(error)
 
 	// Model is the --model argument (provider/id, optionally with
 	// ":<thinking>").

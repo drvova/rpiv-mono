@@ -11,10 +11,10 @@ package workflow
 // schema instead (the XOR rule).
 var PanelVerdictSchema = T.Object(map[string]Schema{
 	"pass":      T.Boolean(),
-	"votes":     T.Object(map[string]Schema{"pass": T.Integer(), "fail": T.Integer()}),
+	"votes":     T.Object(map[string]Schema{"pass": T.Integer(), "fail": T.Integer()}, Schema{"required": []string{"pass", "fail"}}),
 	"agreement": T.Number(),
 	"tie":       T.Boolean(),
-})
+}, Schema{"required": []string{"pass", "votes", "agreement", "tie"}})
 
 // PanelVotes is the per-side tally of a PanelVerdict.
 type PanelVotes struct {

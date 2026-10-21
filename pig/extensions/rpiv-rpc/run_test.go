@@ -99,9 +99,31 @@ func TestRunFailsWhenChildExits(t *testing.T) {
 	}()
 	col.waitFor(t, EventAgentStart)
 	_, _ = c.Call(testContext(t), map[string]any{"type": "die"})
-	if err := <-finished; !errors.Is(err, ErrExited) {
-		t.Fatalf("err %v, want ErrExited", err)
+	if err := <-finished; !errors.Is(err, ErrExited) || !strings.Contains(err.Error(), "exit status 3") {
+		t.Fatalf("err %v, want ErrExited naming exit status 3", err)
 	}
+}
+
+func TestCloseFromRunOnEvent(t *testing.T) {
+	c := startFake(t)
+	finished := make(chan error, 1)
+	go func() {
+		_, err := c.Run(testContext(t), "hello", PromptOptions{}, func(event Event) {
+			if event.Type == EventAgentEnd {
+				c.Close()
+			}
+		})
+		finished <- err
+	}()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("err %v, want ErrClosed", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its onEvent closed the client")
+	}
+	waitDone(t, c)
 }
 
 func TestWaitSettledAfterClose(t *testing.T) {

@@ -1,6 +1,16 @@
 package host
 
-import "github.com/MichaelKinsy/PiG/extensions/sdk"
+import (
+	"errors"
+
+	"github.com/MichaelKinsy/PiG/extensions/sdk"
+	tui "github.com/juicesharp/rpiv-mono/pig/extensions/rpiv-tui"
+)
+
+// ErrNilHandler is SubscribeEvent's rejection of a nil handler. Its text is
+// the SDK event bus's own, so a caller sees the same error whether the nil is
+// caught here or by the bus.
+var ErrNilHandler = errors.New("pi.events.on: handler must not be nil")
 
 // contextHost adapts a live sdk.Context to Host. Every Host method that
 // mirrors an sdk.Context method is promoted from the embedded value; only the
@@ -17,6 +27,7 @@ var (
 	_ Host                   = (*contextHost)(nil)
 	_ func(sdk.Context) Host = FromContext
 	_ Styler                 = sdk.UITheme{}
+	_ tui.Styler             = sdk.UITheme{}
 	_ ModelStream            = (*sdk.ModelEventStream)(nil)
 )
 
@@ -30,6 +41,9 @@ func FromContext(ctx sdk.Context) Host {
 // AgentDir is sdk.AgentDir.
 func (contextHost) AgentDir() (string, error) { return sdk.AgentDir() }
 
+// ConfigDirName is sdk.ConfigDirName.
+func (contextHost) ConfigDirName() (string, error) { return sdk.ConfigDirName() }
+
 // Version is sdk.Version.
 func (contextHost) Version() (string, error) { return sdk.Version() }
 
@@ -39,14 +53,24 @@ func (h contextHost) EmitEvent(channel string, data any) error {
 }
 
 // SubscribeEvent registers handler on the request-bound event bus. The bus
-// hands each dispatch its own sdk.Context, which the handler does not see.
+// hands each dispatch its own sdk.Context, which the handler does not see. A
+// nil handler is rejected before the bus is asked, so it never becomes a live
+// subscription whose first dispatch would dereference nil.
 func (h contextHost) SubscribeEvent(channel string, handler func(data any) error) (func(), error) {
+	if handler == nil {
+		return func() {}, ErrNilHandler
+	}
 	return h.Context.Events().On(channel, busHandler(handler))
 }
 
 // busHandler adapts a payload-only handler to the event bus's handler type by
-// dropping the dispatch context.
+// dropping the dispatch context. A nil handler adapts to a nil bus handler,
+// which the bus rejects, rather than to a closure that would panic when
+// dispatched.
 func busHandler(handler func(data any) error) sdk.EventBusHandler {
+	if handler == nil {
+		return nil
+	}
 	return func(_ sdk.Context, data any) error { return handler(data) }
 }
 
@@ -65,10 +89,10 @@ func (h contextHost) SessionGetBranch(fromID *string) ([]map[string]any, error) 
 	return h.Context.SessionManager().GetBranch(fromID)
 }
 
-// Theme is UITheme() as a Styler. It panics on a Host built from a zero
+// Theme is UITheme() as a tui.Styler. It panics on a Host built from a zero
 // sdk.Context, because the SDK reads the theme snapshot through the
 // extension connection.
-func (h contextHost) Theme() Styler { return h.Context.UITheme() }
+func (h contextHost) Theme() tui.Styler { return h.Context.UITheme() }
 
 // AllModels is ModelRegistry().GetAll.
 func (h contextHost) AllModels() ([]map[string]any, error) {
@@ -78,6 +102,11 @@ func (h contextHost) AllModels() ([]map[string]any, error) {
 // AvailableModels is ModelRegistry().GetAvailable.
 func (h contextHost) AvailableModels() ([]map[string]any, error) {
 	return h.Context.ModelRegistry().GetAvailable()
+}
+
+// FindModel is ModelRegistry().Find.
+func (h contextHost) FindModel(providerID, modelID string) map[string]any {
+	return h.Context.ModelRegistry().Find(providerID, modelID)
 }
 
 // ProviderAuthStatus is ModelRegistry().GetProviderAuthStatus.
@@ -93,6 +122,11 @@ func (h contextHost) ProviderDisplayName(provider string) (string, error) {
 // APIKeyForProvider is ModelRegistry().GetApiKeyForProvider.
 func (h contextHost) APIKeyForProvider(provider string) *string {
 	return h.Context.ModelRegistry().GetApiKeyForProvider(provider)
+}
+
+// APIKeyAndHeaders is ModelRegistry().GetApiKeyAndHeaders.
+func (h contextHost) APIKeyAndHeaders(model map[string]any) (map[string]any, error) {
+	return h.Context.ModelRegistry().GetApiKeyAndHeaders(model)
 }
 
 // StreamSimple is ModelRegistry().StreamSimple. The SDK always returns a

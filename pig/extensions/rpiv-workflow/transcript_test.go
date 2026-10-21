@@ -11,10 +11,10 @@ func assistant(stop StopReason, parts ...BranchContentPart) BranchEntry {
 }
 
 func user(text string) BranchEntry {
-	return BranchEntry{Type: "message", Message: &BranchMessage{Role: "user", Content: []BranchContentPart{{Type: "text", Text: text}}}}
+	return BranchEntry{Type: "message", Message: &BranchMessage{Role: "user", Content: []BranchContentPart{{Type: "text", Text: &text}}}}
 }
 
-func text(s string) BranchContentPart { return BranchContentPart{Type: "text", Text: s} }
+func text(s string) BranchContentPart { return BranchContentPart{Type: "text", Text: &s} }
 
 func TestClassifyStop(t *testing.T) {
 	cases := []struct {
@@ -39,16 +39,54 @@ func TestClassifyStop(t *testing.T) {
 }
 
 func TestLastAssistantText(t *testing.T) {
-	branch := []BranchEntry{assistant("", text("first")), user("q"), assistant(StopReasonStop, text("  a  "), BranchContentPart{Type: "thinking", Text: "hidden"}, text("b"))}
+	branch := []BranchEntry{assistant("", text("first")), user("q"), assistant(StopReasonStop, text("  a  "), BranchContentPart{Type: "thinking", Text: String("hidden")}, text("b"))}
 	got, ok := LastAssistantText(branch, 0)
 	if !ok || got != "a  \nb" {
 		t.Fatalf("%q %v", got, ok)
 	}
+	t.Run("a text part without text is skipped, an empty text is an empty line", func(t *testing.T) {
+		got, _ := LastAssistantText([]BranchEntry{assistant("", text("a"), BranchContentPart{Type: "text"}, text("b"))}, 0)
+		if got != "a\nb" {
+			t.Fatalf("%q", got)
+		}
+		got, _ = LastAssistantText([]BranchEntry{assistant("", text("a"), text(""), text("b"))}, 0)
+		if got != "a\n\nb" {
+			t.Fatalf("%q", got)
+		}
+	})
 	if _, ok := LastAssistantText([]BranchEntry{assistant(StopReasonStop, text("   "))}, 0); ok {
 		t.Fatal("blank text should read false")
 	}
 	if _, ok := LastAssistantText([]BranchEntry{user("x")}, 0); ok {
 		t.Fatal("no assistant")
+	}
+}
+
+func TestMatchText(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern string
+		mode    MatchMode
+		text    string
+		want    string
+		ok      bool
+	}{
+		{"global takes the last occurrence", `\S+\.md`, MatchGlobal, "one.md two.md", "two.md", true},
+		{"first takes the first occurrence", `\S+\.md`, MatchFirst, "one.md two.md", "one.md", true},
+		{"global ignores capture groups", `path: (\S+)`, MatchGlobal, "path: a.md then path: b.md", "path: b.md", true},
+		{"first takes the last capture group", `path: (\S+)`, MatchFirst, "path: a.md then path: b.md", "a.md", true},
+		{"first with several groups takes the final one", `(\w+)-(\w+)`, MatchFirst, "x-y x-z", "y", true},
+		{"no match", `\d+`, MatchGlobal, "none", "", false},
+		{"first with a non-participating last group reads as no match", `a(x)?`, MatchFirst, "a", "", false},
+		{"an empty match is a match", `x*`, MatchFirst, "", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := MatchText(regexp.MustCompile(c.pattern), c.mode, c.text)
+			if got != c.want || ok != c.ok {
+				t.Fatalf("got %q %v want %q %v", got, ok, c.want, c.ok)
+			}
+		})
 	}
 }
 
@@ -59,21 +97,27 @@ func TestLastMatchInBranch(t *testing.T) {
 		assistant("", BranchContentPart{Type: "toolCall", Name: "write", Arguments: map[string]any{"path": ".rpiv/artifacts/a/tool.md"}}),
 		assistant("", text("then .rpiv/artifacts/a/two.md and .rpiv/artifacts/a/three.md")),
 	}
-	if got, ok := LastMatchInBranch(branch, pattern, 0); !ok || got != ".rpiv/artifacts/a/three.md" {
+	if got, ok := LastMatchInBranch(branch, pattern, MatchGlobal, 0); !ok || got != ".rpiv/artifacts/a/three.md" {
 		t.Fatalf("%q", got)
 	}
-	if got, _ := LastMatchInBranch(branch[:2], pattern, 0); got != ".rpiv/artifacts/a/one.md" {
+	if got, ok := LastMatchInBranch(branch, pattern, MatchFirst, 0); !ok || got != ".rpiv/artifacts/a/two.md" {
+		t.Fatalf("first-match mode: %q", got)
+	}
+	if got, _ := LastMatchInBranch(branch[:2], pattern, MatchGlobal, 0); got != ".rpiv/artifacts/a/one.md" {
 		t.Fatalf("tool parts must be ignored: %q", got)
 	}
-	if _, ok := LastMatchInBranch(branch, pattern, 3); ok {
+	if _, ok := LastMatchInBranch(branch, pattern, MatchGlobal, 3); ok {
 		t.Fatal("offset past end")
+	}
+	if _, ok := LastMatchInBranch([]BranchEntry{assistant("", BranchContentPart{Type: "text"})}, regexp.MustCompile(`.*`), MatchGlobal, 0); ok {
+		t.Fatal("a text part without text must be skipped")
 	}
 }
 
 func TestIterToolUses(t *testing.T) {
 	branch := []BranchEntry{
 		user("x"),
-		assistant("", BranchContentPart{Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "ls"}}, BranchContentPart{Type: "text", Text: "t"}),
+		assistant("", BranchContentPart{Type: "toolCall", Name: "bash", Arguments: map[string]any{"command": "ls"}}, text("t")),
 		assistant("", BranchContentPart{Type: "tool_use", Name: "write", Input: map[string]any{"path": "a"}}, BranchContentPart{Type: "toolCall"}, BranchContentPart{Type: "toolCall", Name: "noargs"}),
 	}
 	var seen []string
@@ -96,10 +140,13 @@ func TestIterToolUses(t *testing.T) {
 }
 
 func TestReadBranchAndSessionRef(t *testing.T) {
-	decoded := []any{map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "stopReason": "stop", "content": []any{map[string]any{"type": "text", "text": "hi"}, map[string]any{"type": "toolCall", "name": "bash", "arguments": map[string]any{"command": "ls"}}}}}}
+	decoded := []any{map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "stopReason": "stop", "content": []any{map[string]any{"type": "text", "text": "hi"}, map[string]any{"type": "text"}, map[string]any{"type": "toolCall", "name": "bash", "arguments": map[string]any{"command": "ls"}}}}}}
 	branch := ReadBranch(readerOf{decoded})
-	if len(branch) != 1 || branch[0].Message.StopReason != StopReasonStop || branch[0].Message.Content[1].Arguments["command"] != "ls" {
+	if len(branch) != 1 || branch[0].Message.StopReason != StopReasonStop || branch[0].Message.Content[2].Arguments["command"] != "ls" {
 		t.Fatalf("%+v", branch)
+	}
+	if parts := branch[0].Message.Content; parts[0].Text == nil || *parts[0].Text != "hi" || parts[1].Text != nil {
+		t.Fatalf("text pointer decoding: %+v", parts)
 	}
 	if ReadBranch(readerOf{"garbage"}) != nil {
 		t.Fatal("unknown shape reads as empty")

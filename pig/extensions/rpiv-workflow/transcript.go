@@ -52,8 +52,11 @@ func ClassifyStop(branch []BranchEntry, offsetStart int) StopSignal {
 // session file carries) or {type: "tool_use", input} (the Anthropic wire
 // spelling). IterToolUses normalises both.
 type BranchContentPart struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
+	Type string `json:"type"`
+	// Text is a "text" part's spoken text — a pointer because the walkers
+	// test `typeof part.text === "string"`: a part with no text is skipped,
+	// a part with empty text is kept (an empty line).
+	Text      *string        `json:"text,omitempty"`
 	Name      string         `json:"name,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
 	Arguments map[string]any `json:"arguments,omitempty"`
@@ -158,7 +161,9 @@ func branchEntryFromMap(m map[string]any) BranchEntry {
 			}
 			part := BranchContentPart{}
 			part.Type, _ = pm["type"].(string)
-			part.Text, _ = pm["text"].(string)
+			if text, ok := pm["text"].(string); ok {
+				part.Text = &text
+			}
 			part.Name, _ = pm["name"].(string)
 			part.Input, _ = pm["input"].(map[string]any)
 			part.Arguments, _ = pm["arguments"].(map[string]any)
@@ -225,8 +230,8 @@ func LastAssistantText(branch []BranchEntry, offsetStart int) (string, bool) {
 		}
 		parts := []string{}
 		for _, part := range branch[i].Message.Content {
-			if part.Type == "text" {
-				parts = append(parts, part.Text)
+			if part.Type == "text" && part.Text != nil {
+				parts = append(parts, *part.Text)
 			}
 		}
 		text := strings.TrimSpace(strings.Join(parts, "\n"))
@@ -235,12 +240,55 @@ func LastAssistantText(branch []BranchEntry, offsetStart int) (string, bool) {
 	return "", false
 }
 
+// MatchMode says which String.prototype.match shape a pattern scan
+// reproduces — the port of the RegExp `g` flag, which Go's regexp cannot
+// spell. The flag is caller-owned in the TypeScript collectors: the built-in
+// URL and directory-path collectors scan globally; an author's own pattern
+// may not.
+type MatchMode int
+
+const (
+	// MatchGlobal mirrors text.match(/re/g): every whole-match occurrence is
+	// found and the LAST one is the result.
+	MatchGlobal MatchMode = iota
+	// MatchFirst mirrors text.match(/re/) without g: only the first
+	// occurrence counts, and with capture groups the result is the LAST
+	// group's text (String.match returns [whole, g1, g2, …] and the scan
+	// takes the final element). A last group that did not participate reads
+	// as no match for that text.
+	MatchFirst
+)
+
+// MatchText applies pattern to text under mode and returns what the
+// TypeScript `matches[matches.length - 1]` yields; false when the pattern
+// does not match at all (an empty match is "", true). The shared primitive
+// behind LastMatchInBranch and the tool-argument fallback scan.
+func MatchText(pattern *regexp.Regexp, mode MatchMode, text string) (string, bool) {
+	if mode == MatchGlobal {
+		matches := pattern.FindAllString(text, -1)
+		if len(matches) == 0 {
+			return "", false
+		}
+		return matches[len(matches)-1], true
+	}
+	loc := pattern.FindStringSubmatchIndex(text)
+	if loc == nil {
+		return "", false
+	}
+	last := len(loc) - 2
+	if loc[last] < 0 {
+		return "", false
+	}
+	return text[loc[last]:loc[last+1]], true
+}
+
 // LastMatchInBranch scans assistant text blocks in reverse for pattern and
-// returns the last match. The agent's final message is usually where the
-// actionable path/URL lands, so iterating from the tail short-circuits on the
-// first hit. Thinking and tool-invocation parts are ignored. Within a block
-// the LAST occurrence wins.
-func LastMatchInBranch(branch []BranchEntry, pattern *regexp.Regexp, offsetStart int) (string, bool) {
+// returns the first block's result under mode (MatchText). The agent's final
+// message is usually where the actionable path/URL lands, so iterating from
+// the tail short-circuits on the first hit. Thinking, tool-invocation and
+// text-less parts are ignored. The second result is false only when no
+// block matched.
+func LastMatchInBranch(branch []BranchEntry, pattern *regexp.Regexp, mode MatchMode, offsetStart int) (string, bool) {
 	for i := len(branch) - 1; i >= max(offsetStart, 0); i-- {
 		if !isAssistant(branch[i]) {
 			continue
@@ -248,12 +296,11 @@ func LastMatchInBranch(branch []BranchEntry, pattern *regexp.Regexp, offsetStart
 		content := branch[i].Message.Content
 		for j := len(content) - 1; j >= 0; j-- {
 			part := content[j]
-			if part.Type != "text" {
+			if part.Type != "text" || part.Text == nil {
 				continue
 			}
-			matches := pattern.FindAllString(part.Text, -1)
-			if len(matches) > 0 {
-				return matches[len(matches)-1], true
+			if hit, ok := MatchText(pattern, mode, *part.Text); ok {
+				return hit, true
 			}
 		}
 	}

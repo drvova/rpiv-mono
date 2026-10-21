@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -302,28 +303,34 @@ func (r *lazyProviderRegistry) Reset() {
 	box.mu.Unlock()
 }
 
-// WithTimeout races fn against d. fn runs on its own goroutine and is NOT
-// cancelled on timeout — the dangling call becomes inert once whatever it
-// waited on is disposed (the same posture as the TypeScript promise race).
-// On timeout the given timeoutErr is returned verbatim, so a typed error
-// (SchemaTimeoutError and friends) survives errors.As checks.
-func WithTimeout[T any](fn func() (T, error), d time.Duration, timeoutErr error) (T, error) {
+// WithTimeout runs fn under a context that is cancelled when d elapses (or
+// when ctx is cancelled first) and joins its result through a buffered
+// channel, so the worker never blocks on a caller that has left. On timeout
+// the given timeoutErr is returned verbatim, so a typed error
+// (SchemaTimeoutError and friends) survives errors.As checks; a cancellation
+// of ctx itself returns ctx.Err(). fn must honour its context for the
+// cancellation to take effect: whatever it returns after the caller has
+// given up is discarded.
+func WithTimeout[T any](ctx context.Context, fn func(ctx context.Context) (T, error), d time.Duration, timeoutErr error) (T, error) {
 	type result struct {
 		value T
 		err   error
 	}
+	bounded, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
 	done := make(chan result, 1)
 	go func() {
-		value, err := fn()
+		value, err := fn(bounded)
 		done <- result{value, err}
 	}()
-	timer := time.NewTimer(d)
-	defer timer.Stop()
 	select {
 	case r := <-done:
 		return r.value, r.err
-	case <-timer.C:
+	case <-bounded.Done():
 		var zero T
+		if ctx.Err() != nil {
+			return zero, ctx.Err()
+		}
 		return zero, timeoutErr
 	}
 }
@@ -379,6 +386,11 @@ func DeepEqual(a, b any) bool {
 		return true
 	default:
 		if vb.Kind() == reflect.Map || vb.Kind() == reflect.Slice || vb.Kind() == reflect.Array {
+			return false
+		}
+		// Values Go cannot compare (functions, channels, structs holding
+		// them) never read as equal; plain contract data carries none.
+		if !va.Comparable() || !vb.Comparable() {
 			return false
 		}
 		return a == b

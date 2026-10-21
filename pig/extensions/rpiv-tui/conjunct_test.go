@@ -45,7 +45,8 @@ func TestIndicConjunctsAreOneCluster(t *testing.T) {
 	}
 }
 
-// Code points uniseg measures differently from Pi are overridden to Pi's width.
+// Code points uniseg measures differently from Pi take Pi's East Asian width
+// from wideRanges.
 func TestWidthOverridesMatchPi(t *testing.T) {
 	for s, want := range map[string]int{
 		"a b": 3, "a b": 3, "ｶﾞ": 2, "ﾊﾟ": 2, "〰": 2, "〽": 2, "㊗": 2, "㊙": 2,

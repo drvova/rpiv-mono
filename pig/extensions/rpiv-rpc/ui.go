@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -139,17 +141,35 @@ func (c *Client) handleUIRequest(event Event) {
 		}
 		return
 	}
-	if handler == nil {
-		go func() { _ = c.RespondUI(req, UICancelled()) }()
-		return
-	}
-	go func() {
+	c.dialogs.Add(1)
+	go c.runDialog(req, handler)
+}
+
+// runDialog answers one dialog on its own goroutine: with no handler it is
+// cancelled at once; otherwise the handler runs under the client's lifetime
+// context, bounded by the request's timeout, and its answer is written. The
+// exit watcher joins every dialog goroutine before Done closes.
+//
+// An answer that cannot be written is reported to Options.OnError, unless the
+// child is closed or has exited: then it no longer waits for the answer, and
+// the failure is expected.
+func (c *Client) runDialog(req UIRequest, handler UIHandler) {
+	defer c.dialogs.Done()
+	resp := UICancelled()
+	if handler != nil {
 		ctx := c.ctx
 		if req.Timeout != nil && *req.Timeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(*req.Timeout*float64(time.Millisecond)))
 			defer cancel()
 		}
-		_ = c.RespondUI(req, handler(ctx, req))
-	}()
+		resp = handler(ctx, req)
+	}
+	err := c.RespondUI(req, resp)
+	if err == nil || errors.Is(err, ErrClosed) || c.childGone() {
+		return
+	}
+	if c.opts.OnError != nil {
+		c.opts.OnError(fmt.Errorf("rpc: answer dialog %s: %w", req.ID, err))
+	}
 }

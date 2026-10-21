@@ -11,7 +11,8 @@
 // removed, Unicode line separators never split a record) and parses each as
 // JSON; a drain that copies standard error to Options.Stderr or discards it,
 // so a full pipe never blocks the child; and an exit watcher that reaps the
-// process, lets the readers drain, releases the pipes and closes Done.
+// process, lets the readers drain, releases the pipes, joins the goroutines
+// answering dialogs and closes Done.
 //
 // Every command carries an id and the child repeats it in the response, so
 // Call correlates by id: several commands may be in flight and answers may
@@ -20,7 +21,10 @@
 // the id; an answer that still arrives is handed to subscribers as a response
 // event. The typed wrappers (Prompt, GetState, Bash, Compact, ...) cover every
 // command of PiG's rpc-commands reference and turn a success false response
-// into a *CommandError whose Message is the child's free-text error.
+// into a *CommandError whose Message is the child's free-text error. Once the
+// child is gone a command fails with ErrClosed or ErrExited; the latter names
+// the exit status, which the client waits a moment for, since the output
+// closes just before the child is reaped.
 //
 // Every record that is not the answer to a pending command is an Event, which
 // Subscribe delivers in subscription order on the reader goroutine. Event
@@ -37,17 +41,23 @@
 // same id. The Client relays each dialog to the UIHandler on its own
 // goroutine, with a context that ends on Close and carries the request's
 // timeout, and writes the matching response; with no handler every dialog is
-// cancelled at once, as the child does when input closes. Fire-and-forget
+// cancelled at once, as the child does when input closes. An answer that
+// cannot be written while the child still runs is reported to
+// Options.OnError, the one failure no caller is waiting for. Fire-and-forget
 // requests (notify, setStatus, setWidget, setTitle, set_editor_text) go to the
 // UIObserver. Both kinds are also events, so a consumer can mirror the child's
 // UI into its own.
 //
-// Close is the orderly shutdown: closing standard input tells the child to
-// finish, which is the protocol's own end-of-session signal; after
-// Options.CloseGrace the process group is killed. On Unix the child leads its
-// own process group, so the kill reaches the tools and extension processes it
-// spawned and leaves no orphan; elsewhere only the child is killed. The Start
-// context bounds the process's lifetime: when it ends, the client closes.
+// Close is the orderly shutdown: it stops event delivery, then closing
+// standard input tells the child to finish, which is the protocol's own
+// end-of-session signal; after Options.CloseGrace the process group is
+// killed. On Unix the child leads its own process group, so the kill reaches
+// the tools and extension processes it spawned and leaves no orphan;
+// elsewhere only the child is killed. Close returns once the child is gone
+// and never joins the readers, so it is safe to call from any callback, as
+// PiG's own client's Stop is; Done and Wait join the readers and the dialog
+// handlers, so they are awaited outside callbacks. The Start context bounds
+// the process's lifetime: when it ends, the client closes.
 //
 // ResolvePig locates the executable: an explicit override, then $PIG_BIN,
 // then pig on PATH, then (Linux) the first ancestor process whose executable

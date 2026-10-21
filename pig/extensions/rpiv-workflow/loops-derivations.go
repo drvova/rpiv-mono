@@ -16,13 +16,30 @@ func FreezesEntryArgsOf(loop LoopDef) bool {
 // "does this stage run through the loop driver, and with what spec": an
 // explicit Loop wins; a Verify synthesises; neither ⇒ nil.
 func EffectiveLoopOf(def StageDef) LoopDef {
-	if def.Loop != nil {
+	if loopPresent(def.Loop) {
 		return def.Loop
 	}
 	if def.Verify != nil {
 		return SynthesizeVerifyLoop(def.Verify)
 	}
 	return nil
+}
+
+// loopPresent reports whether a loop slot carries a loop — false for a nil
+// interface AND for a typed-nil pointer (the zero a hand-rolled literal can
+// hold), so no consumer dereferences nothing through a passing `!= nil`.
+func loopPresent(loop LoopDef) bool {
+	switch l := loop.(type) {
+	case nil:
+		return false
+	case *FanoutLoop:
+		return l != nil
+	case *IterateLoop:
+		return l != nil
+	case *AssessLoop:
+		return l != nil
+	}
+	return true
 }
 
 // JudgeSlotOf is THE judge-slot-of-stage derivation — the RAW AnyJudge a

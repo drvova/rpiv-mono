@@ -19,10 +19,12 @@ import (
 
 // Errors a command can fail with once the child is gone.
 var (
-	// ErrClosed reports a command sent after Close.
+	// ErrClosed reports a command sent, or still unanswered, after Close.
 	ErrClosed = errors.New("rpc: client closed")
 	// ErrExited reports a command the child did not answer before it exited
-	// or closed its output. The wrapped text carries the exit status.
+	// or closed its output. The wrapped text carries the exit status once
+	// the child has been reaped, and "output closed" when the child closed
+	// its output but keeps running.
 	ErrExited = errors.New("rpc: pig exited")
 )
 
@@ -31,13 +33,20 @@ var (
 // holding them cannot keep the client alive.
 const drainGrace = 2 * time.Second
 
+// exitGrace is how long a command that lost the child's output waits for the
+// child to be reaped before it fails: the output closes a moment before Wait
+// returns, and the exit status says why the child died.
+const exitGrace = 2 * time.Second
+
 // Client drives one `pig --mode rpc` child over its standard streams. Every
 // method is safe for concurrent use. Commands are correlated by id, so
 // several may be in flight at once and answers may arrive in any order.
 //
 // Subscribers, event callbacks and the UI observer run on the reader
-// goroutine in subscription order; one that blocks stalls every later record.
-// UI dialog handlers run on their own goroutines.
+// goroutine in subscription order; one that blocks stalls every later record,
+// the answers to commands included. A callback may call Close; it must not
+// wait for a command, for Done or for Wait, since those need the reader. UI
+// dialog handlers run on their own goroutines.
 type Client struct {
 	opts   Options
 	cmd    *exec.Cmd
@@ -49,13 +58,17 @@ type Client struct {
 	stdinOnce   sync.Once
 	writeMu     sync.Mutex
 
+	// closing is set first thing by Close: from then on the reader drains the
+	// child's output without delivering events, and an unanswered command
+	// fails with ErrClosed.
+	closing atomic.Bool
+
 	mu         sync.Mutex
 	pending    map[string]chan Response
 	subs       []subscriber
 	nextSub    uint64
 	uiHandler  UIHandler
 	uiObserver func(UIRequest)
-	closing    bool
 	exited     bool
 	exitErr    error
 
@@ -65,6 +78,10 @@ type Client struct {
 	readerDone chan struct{}
 	stderrDone chan struct{}
 	done       chan struct{}
+
+	// dialogs counts the goroutines answering dialogs; the exit watcher joins
+	// them before it closes done.
+	dialogs sync.WaitGroup
 
 	// ctx is the client's lifetime: it ends when the child exits or Close
 	// runs, which releases UI dialog handlers.
@@ -164,12 +181,16 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 // PID returns the child's process id.
 func (c *Client) PID() int { return c.cmd.Process.Pid }
 
-// Done returns a channel that closes once the child has exited and the
-// client's readers have stopped. Every pending command has failed by then.
+// Done returns a channel that closes once the child has exited, the client's
+// readers have stopped and every dialog handler has returned: no callback
+// runs after it closes, and every pending command has failed. The reader
+// runs the callbacks, so waiting on Done from one deadlocks; call Close there
+// and wait for Done elsewhere.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
 // Wait blocks until Done and returns the child's exit error: nil for exit
-// status 0, an *exec.ExitError otherwise, including a kill by Close.
+// status 0, an *exec.ExitError otherwise, including a kill by Close. Like
+// Done, it must not be called from a callback.
 func (c *Client) Wait() error {
 	<-c.done
 	c.mu.Lock()
@@ -177,15 +198,20 @@ func (c *Client) Wait() error {
 	return c.exitErr
 }
 
-// Close shuts the child down: it closes standard input, which tells the child
-// to finish, waits up to Options.CloseGrace for it to exit, then kills its
-// process group. Close returns once the child is gone and the readers have
-// stopped; it is idempotent and safe to call from an event callback.
+// Close shuts the child down: it stops delivering events, closes standard
+// input, which tells the child to finish, waits up to Options.CloseGrace for
+// it to exit, then kills its process group. Close returns once the child is
+// gone. It does not join the readers or the dialog handlers, so it is safe
+// to call from a subscriber, Run's onEvent, the UI observer or a dialog
+// handler; Done and Wait join them. Close is idempotent.
+//
+// A command still in flight is answered if its answer arrives before the
+// child exits and fails with ErrClosed otherwise. Events the child writes
+// after Close are not delivered; its output is still drained so it can
+// finish.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
-		c.mu.Lock()
-		c.closing = true
-		c.mu.Unlock()
+		c.closing.Store(true)
 		c.cancel()
 		c.closeStdin()
 		timer := time.NewTimer(c.opts.closeGrace())
@@ -196,13 +222,14 @@ func (c *Client) Close() {
 			killProcessGroup(c.cmd.Process)
 		}
 	})
-	<-c.done
+	<-c.exitedCh
 }
 
 // Subscribe registers fn for every event (each record that is not the answer
 // to a pending command) and returns the function that unregisters it. fn runs
 // on the reader goroutine; a subscription made during dispatch sees later
-// events only.
+// events only. fn may call Close; a command fn sends is not answered until fn
+// returns, so fn must not wait for one.
 func (c *Client) Subscribe(fn func(Event)) (unsubscribe func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -251,7 +278,9 @@ func (c *Client) Call(ctx context.Context, cmd map[string]any) (Response, error)
 	defer c.forget(id)
 
 	if err := c.write(payload); err != nil {
-		if c.stdinClosed.Load() {
+		// A write fails once input is closed, or when the child died with
+		// input still open; both mean no answer can arrive.
+		if c.stdinClosed.Load() || c.childGone() {
 			return Response{}, c.terminalError()
 		}
 		return Response{}, fmt.Errorf("rpc: write %s: %w", typ, err)
@@ -317,13 +346,46 @@ func (c *Client) closeStdin() {
 	})
 }
 
-// terminalError is the error a command fails with once no answer can arrive.
-func (c *Client) terminalError() error {
+// awaitExit waits up to exitGrace for the child to be reaped, unless the
+// client is closing. The child's output closes a moment before Wait returns,
+// and a failure reported after that moment can name the exit status.
+func (c *Client) awaitExit() {
+	if c.closing.Load() {
+		return
+	}
+	select {
+	case <-c.exitedCh:
+		return
+	default:
+	}
+	timer := time.NewTimer(exitGrace)
+	defer timer.Stop()
+	select {
+	case <-c.exitedCh:
+	case <-timer.C:
+	}
+}
+
+// childGone reports whether the child no longer reads commands: the client
+// is closing, or the child has been reaped (waiting as awaitExit does).
+func (c *Client) childGone() bool {
+	c.awaitExit()
+	if c.closing.Load() {
+		return true
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closing {
+	return c.exited
+}
+
+// terminalError is the error a command fails with once no answer can arrive.
+func (c *Client) terminalError() error {
+	c.awaitExit()
+	if c.closing.Load() {
 		return ErrClosed
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.exited {
 		if c.exitErr != nil {
 			return fmt.Errorf("%w: %v", ErrExited, c.exitErr)
@@ -355,8 +417,8 @@ func (c *Client) readLoop() {
 
 // handleLine routes one record: a response whose id is pending answers that
 // command; everything else, a response nobody waits for included, is an
-// event. A line that is not a JSON object with a "type" is ignored, as PiG's
-// own client ignores stray output.
+// event, dropped once Close has run. A line that is not a JSON object with a
+// "type" is ignored, as PiG's own client ignores stray output.
 func (c *Client) handleLine(line []byte) {
 	var head struct {
 		Type string `json:"type"`
@@ -379,6 +441,9 @@ func (c *Client) handleLine(line []byte) {
 			}
 		}
 	}
+	if c.closing.Load() {
+		return
+	}
 	event := Event{Type: head.Type, Raw: line}
 	if head.Type == EventExtensionUIRequest {
 		c.handleUIRequest(event)
@@ -386,7 +451,8 @@ func (c *Client) handleLine(line []byte) {
 	c.dispatch(event)
 }
 
-// dispatch calls a snapshot of the subscribers in order.
+// dispatch calls a snapshot of the subscribers in order. The record reaches
+// every subscriber of the snapshot, even when an earlier one called Close.
 func (c *Client) dispatch(event Event) {
 	c.mu.Lock()
 	subs := slices.Clone(c.subs)
@@ -396,8 +462,8 @@ func (c *Client) dispatch(event Event) {
 	}
 }
 
-// waitLoop reaps the child, lets the readers drain, releases the pipes and
-// closes done.
+// waitLoop reaps the child, lets the readers drain, releases the pipes,
+// joins the dialog goroutines and closes done.
 func (c *Client) waitLoop() {
 	err := c.cmd.Wait()
 	c.mu.Lock()
@@ -418,6 +484,8 @@ func (c *Client) waitLoop() {
 	_ = c.stderr.Close()
 	<-c.readerDone
 	<-c.stderrDone
+	// No dialog starts after the reader stopped, so the count is final.
+	c.dialogs.Wait()
 	close(c.done)
 }
 

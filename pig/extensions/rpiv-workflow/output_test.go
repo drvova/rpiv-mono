@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -99,4 +100,29 @@ func TestNewOutputMeta(t *testing.T) {
 			t.Fatalf("got  %s\nwant %s", raw, want)
 		}
 	})
+}
+
+func TestOutputNilArtifactsSerialiseAsArray(t *testing.T) {
+	o := FinalizeOutput("artifacts", nil, nil, OutputMeta{Stage: "s"})
+	if o.Artifacts == nil {
+		t.Fatal("FinalizeOutput must normalise nil artifacts to the empty list")
+	}
+	raw, _ := json.Marshal(o)
+	want := `{"kind":"artifacts","artifacts":[],"data":null,"meta":{"stage":"s","stageNumber":0,"ts":"","runId":""}}`
+	if string(raw) != want {
+		t.Fatalf("got  %s\nwant %s", raw, want)
+	}
+	raw, _ = json.Marshal(Output{Kind: "x"})
+	if string(raw) != `{"kind":"x","artifacts":[],"data":null,"meta":{"stage":"","stageNumber":0,"ts":"","runId":""}}` {
+		t.Fatalf("zero value: %s", raw)
+	}
+	var back Output
+	if err := json.Unmarshal(raw, &back); err != nil || back.Artifacts == nil || len(back.Artifacts) != 0 {
+		t.Fatalf("round trip %+v %v", back, err)
+	}
+	var verdict Verdict
+	raw, _ = json.Marshal(verdict)
+	if !strings.Contains(string(raw), `"artifacts":[]`) {
+		t.Fatalf("verdict alias: %s", raw)
+	}
 }

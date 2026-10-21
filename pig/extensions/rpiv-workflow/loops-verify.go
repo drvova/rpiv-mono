@@ -3,7 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
-	"strconv"
+	"math"
 )
 
 // Verify — the per-stage post-condition desugared to a degenerate assess
@@ -23,65 +23,71 @@ func Verify(spec VerifySpec) (*VerifySpec, error) {
 }
 
 // VerifyShapeIssues is the single rule source for the verify shape. Accepts
-// *VerifySpec, VerifySpec, a map literal or nil.
+// *VerifySpec, VerifySpec, a map literal or nil. The map-literal arm reads
+// `max` as the dynamic value it is (a fraction, a string, null), so the
+// report renders what the author wrote.
 func VerifyShapeIssues(candidate any) []string {
-	var judge any
-	var hasDone bool
-	var maxCap *int
-	var feedForward FeedForwardFn
-	var feedForwardPresent, feedForwardIsFn bool
+	var judge, maxRaw any
+	var hasDone, maxPresent, feedForwardPresent, feedForwardIsFn bool
 	switch v := candidate.(type) {
 	case *VerifySpec:
 		if v == nil {
 			return []string{"a verify object is required"}
 		}
-		judge, hasDone, maxCap = v.Judge, v.Done != nil, v.Max
-		feedForward, feedForwardPresent, feedForwardIsFn = v.FeedForward, v.FeedForward != nil, v.FeedForward != nil
+		judge, hasDone = v.Judge, v.Done != nil
+		if v.Max != nil {
+			maxRaw, maxPresent = *v.Max, true
+		}
+		feedForwardPresent, feedForwardIsFn = v.FeedForward != nil, v.FeedForward != nil
 	case VerifySpec:
-		judge, hasDone, maxCap = v.Judge, v.Done != nil, v.Max
-		feedForward, feedForwardPresent, feedForwardIsFn = v.FeedForward, v.FeedForward != nil, v.FeedForward != nil
+		judge, hasDone = v.Judge, v.Done != nil
+		if v.Max != nil {
+			maxRaw, maxPresent = *v.Max, true
+		}
+		feedForwardPresent, feedForwardIsFn = v.FeedForward != nil, v.FeedForward != nil
 	case map[string]any:
 		if v == nil {
 			return []string{"a verify object is required"}
 		}
 		judge = v["judge"]
-		_, hasDone = v["done"].(DoneFn)
-		if m, ok := v["max"]; ok {
-			if f, ok := asFloat(m); ok {
-				n := int(f)
-				maxCap = &n
-				if float64(n) != f {
-					maxCap = Int(0)
-				}
-			}
-		}
+		hasDone = isDoneFn(v["done"])
+		maxRaw, maxPresent = v["max"]
 		var raw any
 		raw, feedForwardPresent = v["feedForward"]
-		feedForward, feedForwardIsFn = raw.(FeedForwardFn)
+		feedForwardIsFn = isFeedForwardFn(raw)
 	default:
 		return []string{"a verify object is required"}
 	}
-	_ = feedForward
 	// The judge slot is an AnyJudge — route the panel-vs-single dispatch
 	// through the shared JudgeSlotShapeIssues (one rule source per shape).
 	issues := append([]string{}, JudgeSlotShapeIssues(judge)...)
 	if !hasDone {
 		issues = append(issues, "verify requires `done` to be a function deciding pass/fail from the verdict")
 	}
-	if maxCap != nil && *maxCap < 1 {
-		issues = append(issues, "verify.max: "+strconv.Itoa(*maxCap)+" — must be an integer >= 1 (run.maxIterations caps the upper bound)")
+	if maxPresent && !isPositiveInteger(maxRaw) {
+		rendered := "null"
+		if maxRaw != nil {
+			rendered = jsString(maxRaw)
+		}
+		issues = append(issues, "verify.max: "+rendered+" — must be an integer >= 1 (run.maxIterations caps the upper bound)")
 	}
 	if feedForwardPresent && !feedForwardIsFn {
 		issues = append(issues, "verify `feedForward` must be a function building the next attempt's prompt arg")
 	}
-	effectiveMax := 1
-	if maxCap != nil {
-		effectiveMax = *maxCap
+	effectiveMax := 1.0
+	if maxPresent {
+		effectiveMax = jsNumber(maxRaw)
 	}
 	if effectiveMax > 1 && !feedForwardPresent {
 		issues = append(issues, "verify.max > 1 requires `feedForward` — without it the retried prompt would be byte-identical to the original")
 	}
 	return issues
+}
+
+// isPositiveInteger is `Number.isInteger(v) && v >= 1` over a dynamic value.
+func isPositiveInteger(v any) bool {
+	f, ok := asFloat(v)
+	return ok && !math.IsInf(f, 0) && f == math.Trunc(f) && f >= 1
 }
 
 // neverFeedForward is unreachable by construction: the driver's cap check

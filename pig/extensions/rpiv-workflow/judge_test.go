@@ -60,6 +60,14 @@ func TestPanelMembersIsPanel(t *testing.T) {
 	if IsPanel(j) || !IsPanel(p) || IsPanel(nil) {
 		t.Fatal("isPanel")
 	}
+	t.Run("a nil slot has no members and never panics", func(t *testing.T) {
+		if PanelMembers(nil) != nil || PanelMembers((*PanelJudge)(nil)) != nil || PanelMembers((*Judge)(nil)) != nil {
+			t.Fatal("typed-nil slots must expand to nothing")
+		}
+		if IsPanel((*PanelJudge)(nil)) {
+			t.Fatal("a typed-nil panel is not a panel")
+		}
+	})
 }
 
 func TestResolveJudgePrompt(t *testing.T) {

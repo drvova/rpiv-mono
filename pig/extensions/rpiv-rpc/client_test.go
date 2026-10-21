@@ -222,10 +222,11 @@ func TestCloseWaitsForVoluntaryExit(t *testing.T) {
 	}
 	c.Close()
 	select {
-	case <-c.Done():
+	case <-c.exitedCh:
 	default:
-		t.Fatal("Done is open after Close")
+		t.Fatal("Close returned before the child exited")
 	}
+	waitDone(t, c)
 	if err := c.Wait(); err != nil {
 		t.Fatalf("a child that honored the closed input was killed: %v", err)
 	}
@@ -254,8 +255,8 @@ func TestCloseKillsChildThatIgnoresStdin(t *testing.T) {
 func TestChildExitFailsPendingCalls(t *testing.T) {
 	c := startFake(t)
 	_, err := c.Call(testContext(t), map[string]any{"type": "die"})
-	if !errors.Is(err, ErrExited) {
-		t.Fatalf("err %v, want ErrExited", err)
+	if !errors.Is(err, ErrExited) || !strings.Contains(err.Error(), "exit status 3") {
+		t.Fatalf("err %v, want ErrExited naming exit status 3", err)
 	}
 	select {
 	case <-c.Done():
@@ -297,9 +298,81 @@ func TestStderrIsDrained(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
+	if err := c.Wait(); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(buf.String(), "diagnostic line") {
 		t.Fatalf("stderr %q", buf.String())
 	}
+}
+
+func TestExitStatusInCommandError(t *testing.T) {
+	// The child exits before it answers, which is how a startup failure
+	// (unknown flag, missing model) looks: the error names the status
+	// whether the command was written before or after the exit.
+	c := startFake(t, fakeExitEnv+"=7")
+	_, err := c.Call(testContext(t), map[string]any{"type": "get_state"})
+	if !errors.Is(err, ErrExited) || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("err %v, want ErrExited naming exit status 7", err)
+	}
+	waitDone(t, c)
+	var exitErr *exec.ExitError
+	if err := c.Wait(); !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func TestCloseFromSubscriber(t *testing.T) {
+	c := startFake(t)
+	var mu sync.Mutex
+	var seen []string
+	returned := make(chan struct{})
+	c.Subscribe(func(event Event) {
+		mu.Lock()
+		seen = append(seen, event.Type)
+		mu.Unlock()
+		if event.Type == EventAgentStart {
+			c.Close()
+			close(returned)
+		}
+	})
+	if _, err := c.Prompt(testContext(t), "hello", PromptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close called from a subscriber did not return")
+	}
+	waitDone(t, c)
+	if err := c.Wait(); err != nil {
+		t.Fatalf("the child did not finish on its own after Close: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("events delivered after Close: %v", seen)
+	}
+}
+
+func TestCloseFromSubscriberAtSettle(t *testing.T) {
+	// The record being dispatched still reaches every subscriber, so a
+	// WaitSettled subscribed after the closing one sees its settle.
+	c := startFake(t)
+	c.Subscribe(func(event Event) {
+		if event.Type == EventAgentSettled {
+			c.Close()
+		}
+	})
+	ctx := testContext(t)
+	if _, err := c.Prompt(ctx, "hello", PromptOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := c.WaitSettled(ctx)
+	if err != nil || aborted {
+		t.Fatalf("WaitSettled: %v, aborted %v", err, aborted)
+	}
+	waitDone(t, c)
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {

@@ -318,7 +318,7 @@ func parseKeyID(keyID string) (baseKey string, modifier int, ok bool) {
 		prefix string
 		bit    int
 	}{{"shift+", modShift}, {"alt+", modAlt}, {"ctrl+", modCtrl}, {"super+", modSuper}}
-	baseKey = strings.ToLower(keyID)
+	baseKey = jsToLower(keyID)
 	for found := true; found; {
 		found = false
 		for _, name := range modifierNames {
@@ -336,6 +336,18 @@ func parseKeyID(keyID string) (baseKey string, modifier int, ok bool) {
 		return "", 0, false
 	}
 	return baseKey, modifier, true
+}
+
+// jsToLower is String.prototype.toLowerCase: the full Unicode lowercase
+// mapping, which differs from the simple one strings.ToLower applies at a
+// single code point, U+0130 (İ), lowercased to "i" followed by U+0307 rather
+// than a plain "i". The Final_Sigma context is not applied; it cannot change
+// whether an identifier names a key.
+func jsToLower(s string) string {
+	if strings.ContainsRune(s, '\u0130') {
+		s = strings.ReplaceAll(s, "\u0130", "i\u0307")
+	}
+	return strings.ToLower(s)
 }
 
 // resolveKeyCodepoint converts a base key name to the codepoint the dynamic

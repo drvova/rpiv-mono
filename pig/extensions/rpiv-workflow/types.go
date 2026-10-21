@@ -1,6 +1,9 @@
 package workflow
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Runtime types. Three nouns flow through the workflow runtime:
 //   - RunContext — per-run carry (cwd, runId, workflow, state, visited,
@@ -40,6 +43,22 @@ const (
 type RunTermination struct {
 	Status TerminationStatus `json:"status"`
 	Error  string            `json:"error,omitempty"`
+}
+
+// MarshalJSON keeps the TypeScript union's shape: `error` is always present
+// for failed / aborted / cancelled (even when empty) and absent for running
+// and completed.
+func (t RunTermination) MarshalJSON() ([]byte, error) {
+	switch t.Status {
+	case TerminationFailed, TerminationAborted, TerminationCancelled:
+		return json.Marshal(struct {
+			Status TerminationStatus `json:"status"`
+			Error  string            `json:"error"`
+		}{t.Status, t.Error})
+	}
+	return json.Marshal(struct {
+		Status TerminationStatus `json:"status"`
+	}{t.Status})
 }
 
 // FailureMemo is one entry in RunState.FailureMemos — a bounded record of a

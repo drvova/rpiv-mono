@@ -182,8 +182,6 @@ type lifecycleRegistry struct {
 	bundles []*LifecycleListeners
 }
 
-var getLifecycleRegistry = GlobalSlot(lifecycleRegistryKey, func() *lifecycleRegistry { return &lifecycleRegistry{} })
-
 // RegisterLifecycle registers a cross-package listener bundle and returns a
 // disposer that removes it. Multiple registrations coexist — every fired
 // event walks the full registry in registration order, then the per-call bundle.

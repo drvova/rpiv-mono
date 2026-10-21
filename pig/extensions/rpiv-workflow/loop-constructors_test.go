@@ -394,10 +394,10 @@ func TestPanel(t *testing.T) {
 		}
 	})
 	t.Run("PanelVerdictSchema validates a canonical verdict", func(t *testing.T) {
-		if errs := CheckSchema(PanelVerdictSchema, PanelVerdict{Pass: true, Votes: PanelVotes{2, 1}, Agreement: 2.0 / 3}); len(errs) != 0 {
+		if errs := mustCheck(t, PanelVerdictSchema, PanelVerdict{Pass: true, Votes: PanelVotes{2, 1}, Agreement: 2.0 / 3}); len(errs) != 0 {
 			t.Fatalf("%+v", errs)
 		}
-		if errs := CheckSchema(PanelVerdictSchema, map[string]any{"pass": true}); len(errs) == 0 {
+		if errs := mustCheck(t, PanelVerdictSchema, map[string]any{"pass": true}); len(errs) == 0 {
 			t.Fatal("missing required fields accepted")
 		}
 	})
@@ -433,5 +433,61 @@ func TestPanelIntrospection(t *testing.T) {
 	}
 	if PanelSpecOf(nil).Fold != FoldCustom || len(PanelSpecOf(nil).Panel) != 0 {
 		t.Fatal("defensive nil panel")
+	}
+}
+
+func TestShapeIssuesDynamicValues(t *testing.T) {
+	judge := map[string]any{"skill": "grade", "outcome": map[string]any{"name": "v"}}
+	done := func(Output) bool { return true }
+	feedForward := func(context.Context, FeedForwardContext) (string, error) { return "", nil }
+	t.Run("assess map literal accepts plain function literals", func(t *testing.T) {
+		if issues := AssessShapeIssues(map[string]any{"judge": judge, "done": done, "feedForward": feedForward}); len(issues) != 0 {
+			t.Fatalf("%q", issues)
+		}
+		issues := AssessShapeIssues(map[string]any{"judge": judge, "done": DoneFn(nil), "feedForward": "x"})
+		if len(issues) != 2 || !strings.Contains(issues[0], "`done` must be a function") || !strings.Contains(issues[1], "`feedForward` must be a function") {
+			t.Fatalf("%q", issues)
+		}
+	})
+	t.Run("verify map literal accepts plain function literals", func(t *testing.T) {
+		if issues := VerifyShapeIssues(map[string]any{"judge": judge, "done": done, "feedForward": feedForward, "max": 2}); len(issues) != 0 {
+			t.Fatalf("%q", issues)
+		}
+	})
+	t.Run("verify.max renders the dynamic value it was given", func(t *testing.T) {
+		cases := []struct {
+			max  any
+			want string
+		}{
+			{1.5, "verify.max: 1.5 — must be an integer >= 1 (run.maxIterations caps the upper bound)"},
+			{0, "verify.max: 0 — must be an integer >= 1 (run.maxIterations caps the upper bound)"},
+			{-1, "verify.max: -1 — must be an integer >= 1 (run.maxIterations caps the upper bound)"},
+			{"2", "verify.max: 2 — must be an integer >= 1 (run.maxIterations caps the upper bound)"},
+			{nil, "verify.max: null — must be an integer >= 1 (run.maxIterations caps the upper bound)"},
+		}
+		for _, c := range cases {
+			issues := VerifyShapeIssues(map[string]any{"judge": judge, "done": done, "feedForward": feedForward, "max": c.max})
+			if len(issues) != 1 || issues[0] != c.want {
+				t.Fatalf("max %v: %q", c.max, issues)
+			}
+		}
+		issues := VerifyShapeIssues(map[string]any{"judge": judge, "done": done, "max": "2"})
+		if len(issues) != 2 || !strings.Contains(issues[1], "max > 1 requires `feedForward`") {
+			t.Fatalf("a string max still coerces for the feedForward rule: %q", issues)
+		}
+	})
+}
+
+func TestEffectiveLoopOfTypedNil(t *testing.T) {
+	if EffectiveLoopOf(StageDef{Loop: (*FanoutLoop)(nil)}) != nil || EffectiveLoopOf(StageDef{Loop: (*AssessLoop)(nil)}) != nil || EffectiveLoopOf(StageDef{}) != nil {
+		t.Fatal("a typed-nil loop pointer must read as no loop")
+	}
+	verify := Must(Verify(VerifySpec{Judge: skillJudge(t, "grade", "verdict"), Done: func(Output) bool { return true }}))
+	loop := EffectiveLoopOf(StageDef{Loop: (*IterateLoop)(nil), Verify: verify})
+	if loop == nil || loop.Kind() != LoopAssess {
+		t.Fatalf("verify must still synthesise past a typed-nil loop: %v", loop)
+	}
+	if JudgeSlotOf(StageDef{Loop: (*AssessLoop)(nil)}) != nil {
+		t.Fatal("typed-nil assess loop must yield no judge slot")
 	}
 }

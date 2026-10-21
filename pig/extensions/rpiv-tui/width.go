@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -129,13 +130,15 @@ func (g *graphemeIter) Width() int { return g.width }
 // graphemeWidth is pi-tui's graphemeWidth for one cluster. A tab is three
 // columns and a printable ASCII byte one. A cluster made only of terminal
 // spacing marks is one column per mark, and one made only of zero-width code
-// points is zero. An emoji presentation sequence (a pictographic base with
-// U+FE0F) and a keycap sequence are two columns. Otherwise leading non-printing
-// code points are skipped and the first printing code point sets the width:
-// two for East Asian wide, emoji presentation and regional indicators, one
-// otherwise. Each terminal spacing mark after it adds one, an ordinary mark adds
-// nothing, a printing code point after a mark (or a halfwidth and fullwidth
-// form) adds its own width, and a Thai or Lao vowel AM adds one.
+// points is zero. An RGI emoji (Pi's \p{RGI_Emoji}: an emoji code point on its
+// own, or a keycap, emoji presentation, modifier, flag, tag or ZWJ sequence
+// from the RGI set) is two columns whatever its parts would measure.
+// Otherwise leading non-printing code points are skipped and the first
+// printing code point sets the width: a regional indicator is two columns
+// whatever follows it, and any other code point is its East Asian width. Each
+// terminal spacing mark after it adds one, an ordinary mark adds nothing, a
+// printing code point after a mark (or a halfwidth and fullwidth form) adds
+// its own East Asian width, and a Thai or Lao vowel AM adds one.
 func graphemeWidth(seg string) int {
 	switch {
 	case seg == "":
@@ -147,19 +150,14 @@ func graphemeWidth(seg string) int {
 			return 1
 		}
 		return 0
-	case isKeycapSequence(seg):
-		return 2
 	}
-	allSpacingMarks, allZeroWidth, count, hasVS16 := true, true, 0, false
+	allSpacingMarks, allZeroWidth, count := true, true, 0
 	for _, r := range seg {
 		if !isTerminalSpacingMark(r) {
 			allSpacingMarks = false
 		}
 		if !isZeroWidth(r) {
 			allZeroWidth = false
-		}
-		if r == 0xFE0F {
-			hasVS16 = true
 		}
 		count++
 	}
@@ -169,7 +167,7 @@ func graphemeWidth(seg string) int {
 	if allZeroWidth {
 		return 0
 	}
-	if hasVS16 && uniseg.StringWidth(seg) == 2 {
+	if couldBeEmoji(seg) && isRGIEmoji(seg) {
 		return 2
 	}
 	base := seg
@@ -184,11 +182,12 @@ func graphemeWidth(seg string) int {
 		return 0
 	}
 	cp, n := utf8.DecodeRuneInString(base)
-	width := runeCells(cp)
-	if cp == 0x2e3a || cp == 0x2e3b {
-		// The two- and three-em dashes are East Asian neutral: one column in Pi.
-		width = 1
+	if cp >= 0x1F1E6 && cp <= 0x1F1FF {
+		// A regional indicator is two columns even when a spacing mark or a
+		// vowel AM follows it in the same cluster.
+		return 2
 	}
+	width := runeCells(cp)
 	followsMark := false
 	for _, c := range base[n:] {
 		switch {
@@ -209,42 +208,66 @@ func graphemeWidth(seg string) int {
 	return width
 }
 
-// isKeycapSequence reports an RGI keycap emoji: a digit, # or * followed by
-// U+FE0F and U+20E3.
-func isKeycapSequence(seg string) bool {
-	if len(seg) != 7 || seg[1:] != "️⃣" {
-		return false
+// couldBeEmoji is pi-tui's prefilter for the RGI_Emoji test, so the set is
+// consulted only for a cluster that starts in one of the emoji blocks (Emoji
+// and Pictographs, Miscellaneous Technical, Miscellaneous Symbols and
+// Dingbats, the stars and circles at U+2B50), contains U+FE0F, or is longer
+// than two UTF-16 code units (a ZWJ, modifier or flag sequence).
+func couldBeEmoji(seg string) bool {
+	cp, _ := utf8.DecodeRuneInString(seg)
+	if cp >= 0x1F000 && cp <= 0x1FBFF || cp >= 0x2300 && cp <= 0x23FF ||
+		cp >= 0x2600 && cp <= 0x27BF || cp >= 0x2B50 && cp <= 0x2B55 {
+		return true
 	}
-	c := seg[0]
-	return c >= '0' && c <= '9' || c == '#' || c == '*'
+	units := 0
+	for _, r := range seg {
+		if r == 0xFE0F {
+			return true
+		}
+		if r >= 0x10000 {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return units > 2
 }
 
-// runeCells is the width of a single printing code point: two for East Asian
-// wide and fullwidth, emoji presentation and regional indicators, zero for
-// joiners and non-spacing marks, one otherwise. uniseg measures it, except
-// where its tables disagree with Pi's: the line and paragraph separators and
-// the halfwidth katakana voiced sound marks are one column, and the wide
-// pictographs with text presentation and the ranges Unicode 16 made East Asian
-// wide are two.
+// isRGIEmoji is pi-tui's /^\p{RGI_Emoji}$/v test for one cluster: a single
+// code point is looked up in rgiSingleRanges, a longer cluster must be one of
+// rgiSequences exactly. A cluster with extra code points (an RGI sequence
+// followed by a combining mark, say) is not an RGI emoji and keeps the width
+// of its first printing code point.
+func isRGIEmoji(seg string) bool {
+	r, n := utf8.DecodeRuneInString(seg)
+	if n == len(seg) {
+		return inRanges(rgiSingleRanges[:], r)
+	}
+	_, ok := rgiSequenceSet()[seg]
+	return ok
+}
+
+// rgiSequenceSet is rgiSequences as a set. Only a cluster of several code
+// points consults it, so it is built on first use rather than at process
+// start.
+var rgiSequenceSet = sync.OnceValue(func() map[string]struct{} {
+	set := make(map[string]struct{}, len(rgiSequences))
+	for _, s := range &rgiSequences {
+		set[s] = struct{}{}
+	}
+	return set
+})
+
+// runeCells is pi-tui's eastAsianWidth for one printing code point: two for
+// East_Asian_Width Fullwidth and Wide (wideRanges, Unicode 17), one for every
+// other code point, so the two- and three-em dashes, the line and paragraph
+// separators and the halfwidth katakana voiced sound marks are one column and
+// the emoji modifiers U+1F3FB to U+1F3FF are two.
 func runeCells(r rune) int {
-	switch {
-	case r == 0x2028 || r == 0x2029 || r == 0xFF9E || r == 0xFF9F:
-		return 1
-	case inRanges(wideOverrideRanges[:], r):
+	if inRanges(wideRanges[:], r) {
 		return 2
 	}
-	return uniseg.StringWidth(string(r))
-}
-
-// wideOverrideRanges are two-column code points uniseg measures as one: the
-// pictographs with text presentation whose East Asian width is wide (U+3030,
-// U+303D, U+3297, U+3299, U+1F202, U+1F237, U+1F260 to U+1F265) and the
-// symbol ranges Unicode 16 made wide (the Yijing trigrams, monograms and
-// digrams, hexagrams, Tai Xuan Jing symbols and counting rod numerals).
-var wideOverrideRanges = [...]rune{
-	0x2630, 0x2637, 0x268A, 0x268F, 0x3030, 0x3030, 0x303D, 0x303D,
-	0x3297, 0x3297, 0x3299, 0x3299, 0x4DC0, 0x4DFF, 0x1D300, 0x1D356,
-	0x1D360, 0x1D376, 0x1F202, 0x1F202, 0x1F237, 0x1F237, 0x1F260, 0x1F265,
+	return 1
 }
 
 // isTerminalSpacingMark reports a member of pi-tui's terminalSpacingMarkRegex.

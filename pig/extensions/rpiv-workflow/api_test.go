@@ -309,7 +309,7 @@ func TestMatch(t *testing.T) {
 		}
 	})
 	t.Run("fallback routes with a note; missing field renders null", func(t *testing.T) {
-		fb := Must(Match("tie", []MatchBranch{{"escalate", true}}, &MatchOptions{Fallback: "keep"}))
+		fb := Must(Match("tie", []MatchBranch{{"escalate", true}}, &MatchOptions{Fallback: String("keep")}))
 		got, _ := fb.Pick(ctx(map[string]any{}))
 		if got != "keep" {
 			t.Fatalf("got %q", got)
@@ -323,7 +323,7 @@ func TestMatch(t *testing.T) {
 		}
 	})
 	t.Run("from reads a named channel's latest output and does not mark ReadsData", func(t *testing.T) {
-		fromRoute := Must(Match("tie", []MatchBranch{{"escalate", true}}, &MatchOptions{Fallback: "keep", From: "review-panel"}))
+		fromRoute := Must(Match("tie", []MatchBranch{{"escalate", true}}, &MatchOptions{Fallback: String("keep"), From: "review-panel"}))
 		state := &RunState{NamedValue: map[string][]Output{"review-panel": {{Data: map[string]any{"tie": false}}, {Data: map[string]any{"tie": true}}}}}
 		got, _ := fromRoute.Pick(EdgeContext{State: state})
 		if got != "escalate" || MarksReadsData(fromRoute) {
@@ -344,6 +344,14 @@ func TestMatch(t *testing.T) {
 		mustMatch(t, err, "integer-like")
 		_, err = Match("v", []MatchBranch{{"a", 1}, {"b", 1.0}}, nil)
 		mustMatch(t, err, "claimed by both")
+		_, err = Match("f", []MatchBranch{{"a", "x"}}, &MatchOptions{Fallback: String("")})
+		mustMatch(t, err, "non-empty stage name")
+	})
+	t.Run("an absent fallback terminates, an empty one is refused", func(t *testing.T) {
+		route := Must(Match("v", []MatchBranch{{"a", "x"}}, &MatchOptions{}))
+		if strings.Join(route.Targets, ",") != "a,stop" {
+			t.Fatalf("targets %v", route.Targets)
+		}
 	})
 }
 

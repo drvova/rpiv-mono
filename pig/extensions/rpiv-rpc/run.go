@@ -66,7 +66,8 @@ func (c *Client) awaitSettled(ctx context.Context, settled <-chan AgentSettledEv
 // Run sends message as a prompt and follows the run to its agent_settled
 // event. Every event of the run goes to onEvent (when not nil) on the reader
 // goroutine, before Run accounts it. The subscription is in place before the
-// prompt is sent, so no event is missed.
+// prompt is sent, so no event is missed. onEvent may call Close to cut the
+// run short; Run then returns ErrClosed.
 //
 // A prompt the child answers with DispositionHandled returns at once with
 // only Disposition set. A DispositionQueued prompt waits for the next

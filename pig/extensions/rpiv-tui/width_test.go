@@ -37,7 +37,38 @@ func TestVisibleWidth(t *testing.T) {
 		{"flag", "🇨🇳", 2},
 		{"zwj family", "👩‍💻", 2},
 		{"skin tone modifier", "👍🏽", 2},
+		{"lone skin tone modifier", "\U0001F3FD", 2},
+		{"lone skin tone modifier after a reset", "\x1b[0m\U0001F3FD", 2},
+		{"skin tone modifier after a mark adds its own width", "文\u0308\U0001F3FD", 4},
+		{"skin tone modifier after a letter adds nothing", "a\U0001F3FD", 1},
+		{"skin tone modifiers chain into one cluster", "\U0001F3FD\U0001F3FD\U0001F3FD", 2},
 		{"keycap", "1️⃣", 2},
+		{"keycap pound sign", "#️⃣", 2},
+		{"modifier sequence on a text-presentation base", "☝🏻", 2},
+		{"victory hand with medium skin tone", "✌🏽", 2},
+		{"detective with light skin tone", "🕵🏻", 2},
+		{"person bouncing ball with light skin tone", "⛹🏻", 2},
+		{"person lifting weights with light skin tone", "🏋🏻", 2},
+		{"ZWJ sequence with VS16 inside", "❤️‍🔥", 2},
+		{"rainbow flag ZWJ sequence", "🏳️‍🌈", 2},
+		{"kiss ZWJ sequence with VS16 inside", "👩‍❤️‍💋‍👨", 2},
+		{"eye in speech bubble ZWJ sequence", "👁️‍🗨️", 2},
+		{"woman lifting weights ZWJ sequence", "🏋️‍♀️", 2},
+		{"family ZWJ sequence", "🧑‍🧑‍🧒", 2},
+		{"handshake with two skin tones", "🫱🏻‍🫲🏿", 2},
+		{"ZWJ sequence outside the RGI set is measured by its parts", "🧑‍❤️‍🧑", 4},
+		{"modifier sequence with a trailing mark is not an RGI emoji", "☝🏻\u0308", 1},
+		{"unicode 16 emoji", "\U0001FAE9", 2},
+		{"unicode 17 emoji", "\U0001FA8A", 2},
+		{"black star with VS16 is not an RGI emoji", "★️", 1},
+		{"white heart suit with VS16 is not an RGI emoji", "♡️", 1},
+		{"mahjong tile with VS16 is not an RGI emoji", "\U0001F000\uFE0F", 1},
+		{"heart with VS16 and a trailing mark", "❤️\u0308", 1},
+		{"warning sign with VS16 and a trailing mark", "⚠️\u0308", 1},
+		{"letter with VS16", "a️", 1},
+		{"regional indicator pair with a spacing mark", "🇺🇸\u093F", 2},
+		{"regional indicator pair with thai am", "🇺🇸\u0E33", 2},
+		{"lone regional indicator with a spacing mark", "🇺\u093F", 2},
 		{"tree row fragment", "1. ✅ fires 2. ⚠️ null-byte", 27},
 		{"combining acute is zero width", "é", 1},
 		{"latin with diacritics", "čřžůú", 5},
@@ -107,6 +138,10 @@ func TestPadToWidth(t *testing.T) {
 		{"", 2, "  "},
 		{"\x1b[31mred\x1b[0m", 5, "\x1b[31mred\x1b[0m  "},
 		{"你好", 6, "你好  "},
+		{"\U0001F3FD", 4, "\U0001F3FD  "},
+		{"☝🏻", 4, "☝🏻  "},
+		{"❤️‍🔥", 3, "❤️‍🔥 "},
+		{"\U0001FAE9", 3, "\U0001FAE9 "},
 		{"x", -1, "x"},
 	}
 	for _, tc := range cases {
@@ -139,6 +174,83 @@ func TestIsCJKBreak(t *testing.T) {
 	for s, want := range map[string]bool{"中": true, "か": true, "カ": true, "한": true, "ㄅ": true, "。": true, "a": false, " ": false, "é": false, "": false} {
 		if got := isCJKBreak(s); got != want {
 			t.Errorf("isCJKBreak(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+// Code points Unicode 15.1 to 17.0 made East Asian wide, or that uniseg's
+// Unicode 15.0 tables measure differently from Pi, take Pi's width from
+// wideRanges. The ranges are every one where uniseg.StringWidth disagrees
+// with Pi's eastAsianWidth for a printing code point.
+func TestWideRangesFollowUnicode17(t *testing.T) {
+	cases := []struct {
+		lo, hi rune
+		want   int
+	}{
+		{0x2028, 0x2029, 1},   // line and paragraph separator
+		{0x2630, 0x2637, 2},   // Yijing trigrams (Unicode 16)
+		{0x268A, 0x268F, 2},   // Yijing monograms and digrams (Unicode 16)
+		{0x2E3A, 0x2E3B, 1},   // two- and three-em dash
+		{0x2FFC, 0x2FFF, 2},   // ideographic description characters (Unicode 15.1)
+		{0x3030, 0x3030, 2},   // wavy dash
+		{0x303D, 0x303D, 2},   // part alternation mark
+		{0x31E4, 0x31E5, 2},   // CJK strokes (Unicode 15.1)
+		{0x31EF, 0x31EF, 2},   // CJK stroke (Unicode 15.1)
+		{0x3297, 0x3297, 2},   // circled ideograph congratulation
+		{0x3299, 0x3299, 2},   // circled ideograph secret
+		{0x4DC0, 0x4DFF, 2},   // Yijing hexagrams (Unicode 16)
+		{0xFF9E, 0xFF9F, 1},   // halfwidth katakana voiced sound marks
+		{0x16FF2, 0x16FF6, 2}, // ideographic symbols (Unicode 17)
+		{0x187F8, 0x187FF, 2}, // Tangut (Unicode 17)
+		{0x18CFF, 0x18CFF, 2}, // Khitan small script (Unicode 16)
+		{0x18D09, 0x18D1E, 2}, // Tangut supplement (Unicode 17)
+		{0x18D80, 0x18DF2, 2}, // Tangut components supplement (Unicode 17)
+		{0x1D300, 0x1D356, 2}, // Tai Xuan Jing symbols (Unicode 16)
+		{0x1D360, 0x1D376, 2}, // counting rod numerals (Unicode 16)
+		{0x1F202, 0x1F202, 2}, // squared katakana sa
+		{0x1F237, 0x1F237, 2}, // squared CJK unified ideograph-6708
+		{0x1F260, 0x1F265, 2}, // rounded symbols for fu, lu, shou, xi, shuangxi, cai
+		{0x1F3FB, 0x1F3FF, 2}, // emoji modifiers
+		{0x1F6D8, 0x1F6D8, 2}, // Unicode 17 emoji
+		{0x1FA89, 0x1FA8A, 2}, // Unicode 16 and 17 emoji
+		{0x1FA8E, 0x1FA8F, 2}, // Unicode 17 and 16 emoji
+		{0x1FABE, 0x1FABE, 2}, // Unicode 16 emoji
+		{0x1FAC6, 0x1FAC6, 2}, // Unicode 16 emoji
+		{0x1FAC8, 0x1FAC8, 2}, // Unicode 17 emoji
+		{0x1FACD, 0x1FACD, 2}, // Unicode 17 emoji
+		{0x1FADC, 0x1FADC, 2}, // Unicode 16 emoji
+		{0x1FADF, 0x1FADF, 2}, // Unicode 16 emoji
+		{0x1FAE9, 0x1FAEA, 2}, // Unicode 16 and 17 emoji
+		{0x1FAEF, 0x1FAEF, 2}, // Unicode 17 emoji
+	}
+	for _, tc := range cases {
+		for r := tc.lo; r <= tc.hi; r++ {
+			if got := VisibleWidth(string(r)); got != tc.want {
+				t.Errorf("VisibleWidth(%U) = %d, want %d", r, got, tc.want)
+			}
+		}
+	}
+}
+
+func TestCouldBeEmoji(t *testing.T) {
+	for s, want := range map[string]bool{
+		"☝🏻": true, "⌚": true, "⭐": true, "😀": true, "é": false, "a": false, "界": false,
+		"★️": true, "a\u200Db": true, "कि": false, "🇺🇸": true, "ab": false, "\u0E33": false,
+	} {
+		if got := couldBeEmoji(s); got != want {
+			t.Errorf("couldBeEmoji(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
+func TestIsRGIEmoji(t *testing.T) {
+	for s, want := range map[string]bool{
+		"😀": true, "⌚": true, "❤️": true, "❤": false, "★️": false, "a": false, "\U0001F3FD": true,
+		"🇺": false, "1️⃣": true, "☝🏻": true, "❤️‍🔥": true, "🧑‍❤️‍🧑": false, "☝🏻\u0308": false,
+		"🏴󠁧󠁢󠁥󠁮󠁧󠁿": true, "\U0001FAE9": true, "\U0001FA8A": true,
+	} {
+		if got := isRGIEmoji(s); got != want {
+			t.Errorf("isRGIEmoji(%q) = %v, want %v", s, got, want)
 		}
 	}
 }

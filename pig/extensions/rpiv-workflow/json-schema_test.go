@@ -117,17 +117,28 @@ func TestHasAndExtractJsonSchema(t *testing.T) {
 
 func TestValidateToJsonSchemaIssues(t *testing.T) {
 	schema := Schema{"type": "object", "properties": map[string]any{"name": Schema{"type": "string"}}, "required": []string{"name"}}
-	if !ValidateToJsonSchemaIssues(schema, map[string]any{"name": "Alice"}).OK() {
+	validate := func(schema Schema, value any) StandardResult {
+		t.Helper()
+		r, err := ValidateToJsonSchemaIssues(schema, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if !validate(schema, map[string]any{"name": "Alice"}).OK() {
 		t.Fatal("valid")
 	}
-	r := ValidateToJsonSchemaIssues(schema, map[string]any{"name": 42})
+	r := validate(schema, map[string]any{"name": 42})
 	if r.OK() || r.Issues[0].Message == "" {
 		t.Fatalf("%+v", r)
 	}
 	nested := Schema{"type": "object", "properties": map[string]any{"address": Schema{"type": "object", "properties": map[string]any{"zip": Schema{"type": "number"}}, "required": []string{"zip"}}}, "required": []string{"address"}}
-	r = ValidateToJsonSchemaIssues(nested, map[string]any{"address": map[string]any{"zip": "x"}})
+	r = validate(nested, map[string]any{"address": map[string]any{"zip": "x"}})
 	if r.OK() || len(r.Issues[0].Path) == 0 {
 		t.Fatalf("%+v", r)
+	}
+	if _, err := ValidateToJsonSchemaIssues(Schema{"type": "string", "pattern": "("}, "x"); err == nil {
+		t.Fatal("a schema defect must surface as the validator throwing")
 	}
 	t.Run("typebox round-trip validates the same values", func(t *testing.T) {
 		extracted, _ := ExtractJsonSchema(TypeboxSchema(T.Object(map[string]Schema{"count": T.Number()})), "")

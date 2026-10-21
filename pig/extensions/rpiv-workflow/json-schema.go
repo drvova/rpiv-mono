@@ -147,11 +147,16 @@ func JsonSchemaConverter(schema JsonSchemaObject) JSONSchemaConverter {
 // ValidateToJsonSchemaIssues is the shared CheckSchema → StandardIssue
 // mapping both wrappers call, so validation failures are reported identically
 // regardless of which wrapper was used. Each issue's path is the instance
-// path split on "/" (nil at the root).
-func ValidateToJsonSchemaIssues(schema JsonSchemaObject, value any) StandardResult {
-	errs := CheckSchema(schema, value)
+// path split on "/" (nil at the root). A *SchemaDefectError is the port of
+// Value.Check throwing on an unusable schema: the validator threw, the value
+// did not fail.
+func ValidateToJsonSchemaIssues(schema JsonSchemaObject, value any) (StandardResult, error) {
+	errs, err := CheckSchema(schema, value)
+	if err != nil {
+		return StandardResult{}, err
+	}
 	if len(errs) == 0 {
-		return StandardResult{Value: value}
+		return StandardResult{Value: value}, nil
 	}
 	issues := make([]StandardIssue, 0, len(errs))
 	for _, e := range errs {
@@ -173,7 +178,7 @@ func ValidateToJsonSchemaIssues(schema JsonSchemaObject, value any) StandardResu
 		}
 		issues = append(issues, StandardIssue{Message: message, Path: path})
 	}
-	return StandardResult{Issues: issues}
+	return StandardResult{Issues: issues}, nil
 }
 
 // standardSchema is the JsonSchemaCapable both wrappers return.
@@ -184,7 +189,7 @@ type standardSchema struct {
 }
 
 func (s *standardSchema) Validate(_ context.Context, value any) (StandardResult, error) {
-	return ValidateToJsonSchemaIssues(s.schema, value), nil
+	return ValidateToJsonSchemaIssues(s.schema, value)
 }
 
 func (s *standardSchema) JSONSchema() JSONSchemaConverter { return s.converter }

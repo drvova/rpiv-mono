@@ -187,6 +187,8 @@ func TestParseKeyID(t *testing.T) {
 		{"super+a", "a", modSuper, true},
 		{"a", "a", 0, true},
 		{"A", "a", 0, true},
+		{"\u0130", "i\u0307", 0, true},
+		{"ctrl+\u0130", "i\u0307", modCtrl, true},
 		{"escape", "escape", 0, true},
 		{"ctrl++", "+", modCtrl, true},
 		{"+", "+", 0, true},
@@ -396,6 +398,23 @@ func assertRawBackspace(t *testing.T, wantPlain, wantCtrl bool) {
 	}
 	if !MatchesKey("\x7f", "backspace") || MatchesKey("\x7f", "ctrl+backspace") {
 		t.Error("DEL must match only plain backspace")
+	}
+}
+
+func TestMatchesKeyLowercasesLikeJavaScript(t *testing.T) {
+	withKitty(t, false)
+	// "İ".toLowerCase() is "i\u0307", which names no key, so a capital dotted I
+	// never matches the i key.
+	for _, data := range []string{"i", "\x1b[105u", "\x1b[27;1;105~", "\u0130"} {
+		if MatchesKey(data, "\u0130") {
+			t.Errorf("MatchesKey(%q, %q) = true, want false", data, "\u0130")
+		}
+	}
+	if MatchesKey("\x09", "ctrl+\u0130") {
+		t.Errorf("MatchesKey(ctrl+i byte, %q) = true, want false", "ctrl+\u0130")
+	}
+	if !MatchesKey("i", "I") || !MatchesKey("\x09", "ctrl+I") {
+		t.Errorf("ASCII identifiers still lowercase to their key")
 	}
 }
 

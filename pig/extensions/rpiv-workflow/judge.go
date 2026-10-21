@@ -109,11 +109,18 @@ func IsPanel(j AnyJudge) bool {
 
 // PanelMembers is THE expander — the single place a judge value becomes its
 // member list: a panel yields its members; a single judge yields itself.
+// A nil slot — a nil interface or a typed-nil pointer — has no members.
 func PanelMembers(j AnyJudge) []*Judge {
 	switch v := j.(type) {
 	case *PanelJudge:
+		if v == nil {
+			return nil
+		}
 		return v.Members
 	case *Judge:
+		if v == nil {
+			return nil
+		}
 		return []*Judge{v}
 	}
 	return nil

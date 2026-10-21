@@ -12,6 +12,9 @@ func Bool(v bool) *bool { return &v }
 // Int returns a pointer to v — for optional integer fields (Max, MaxRetries, Concurrency, …).
 func Int(v int) *int { return &v }
 
+// String returns a pointer to v — for optional string fields (MatchOptions.Fallback, DepArtifactFlag, …).
+func String(v string) *string { return &v }
+
 // Must unwraps a value-returning constructor (Gate, Match, Fanout, …) inside
 // a workflow literal, panicking on the construction error the TypeScript
 // factory would have thrown at authoring time. Use it only where the

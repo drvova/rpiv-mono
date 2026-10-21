@@ -1,5 +1,9 @@
 package workflow
 
+import (
+	"encoding/json"
+)
+
 // OutputMeta is the metadata stamped on every Output envelope. Field order is
 // the persisted JSON order; Skill is omitted (not null) for script stages.
 type OutputMeta struct {
@@ -26,6 +30,17 @@ type Output struct {
 	Artifacts []Artifact `json:"artifacts"`
 	Data      any        `json:"data"`
 	Meta      OutputMeta `json:"meta"`
+}
+
+// MarshalJSON writes Artifacts as an array even when nil, so a Go zero value
+// serialises to the `"artifacts": []` every TypeScript row carries — the
+// reader indexes artifacts[0] and filters the list, and never meets null.
+func (o Output) MarshalJSON() ([]byte, error) {
+	type plain Output
+	if o.Artifacts == nil {
+		o.Artifacts = []Artifact{}
+	}
+	return json.Marshal(plain(o))
 }
 
 // Built-in output kinds — the two framework-native shapes. Outcome-specific
@@ -59,8 +74,13 @@ type RunView interface {
 // FinalizeOutput is the single source of output metadata authorship. The
 // runner calls it after a stage's collector returned artifacts and the parser
 // (or parser-less default) returned {kind, data}. Nothing is cloned: the
-// artifacts slice and data value pass through by reference.
+// artifacts slice and data value pass through by reference, except that a
+// nil artifacts slice becomes the empty list (an envelope's artifacts is
+// always an array).
 func FinalizeOutput(kind string, artifacts []Artifact, data any, meta OutputMeta) Output {
+	if artifacts == nil {
+		artifacts = []Artifact{}
+	}
 	return Output{Kind: kind, Artifacts: artifacts, Data: data, Meta: meta}
 }
 
